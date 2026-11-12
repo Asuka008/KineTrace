@@ -11,6 +11,31 @@ from kinetrace.video import sample_indices
 
 
 class Smoke(unittest.TestCase):
+    def test_preflight_uses_limited_rows_and_unique_videos(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            csv_path = root / "split.csv"
+            csv_path.write_text("video_id,sentence\na,first\na,second\nb,third\n")
+            (root / "a.mp4").touch()
+            cli = ["check-data", "--csv", str(csv_path), "--videos", tmp]
+            self.assertEqual(run(parser().parse_args(cli + ["--limit", "2"])),
+                             {"queries": 2, "videos": 1})
+            with self.assertRaisesRegex(FileNotFoundError, r"Missing 1 of 2.*b\.mp4"):
+                run(parser().parse_args(cli))
+
+    def test_target_ranks_use_saved_order_and_report_misses(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            raw, out = (Path(tmp) / name for name in ("run.jsonl", "ranks.jsonl"))
+            candidates = [{"video_id": "b", "retrieval_rank": 2},
+                          {"video_id": "a", "retrieval_rank": 1}]
+            write_run(raw, [{"query_id": "q1", "query": "first", "target": "a", "candidates": candidates},
+                            {"query_id": "q2", "query": "second", "target": "c", "candidates": candidates}])
+            run(parser().parse_args(["target-ranks", "--input", str(raw), "--out", str(out)]))
+            first, second = read_run(out)
+            self.assertEqual(first, {"query_id": "q1", "query": "first", "target": "a",
+                                     "top_video": "b", "candidate_depth": 2, "target_rank": 2})
+            self.assertIsNone(second["target_rank"])
+
     def test_retrieve_rerank_metrics(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

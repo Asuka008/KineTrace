@@ -29,3 +29,4 @@ python -m kinetrace build --csv "$MSRVTT_CSV" --videos "$VIDEO_DIR" \
     --index "$run/index" "${limit_args[@]}" | tee "$run/build.json"
 python -m kinetrace retrieve --csv "$MSRVTT_CSV" --index "$run/index" \
     --top-k "${RECALL_K:-20}" --out "$run/retrieval.jsonl" "${limit_args[@]}" | tee "$run/metrics.json"
+python -m kinetrace target-ranks --input "$run/retrieval.jsonl" --out "$run/target-ranks.jsonl"

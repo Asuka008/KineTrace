@@ -34,6 +34,17 @@ def read_run(path):
                 yield json.loads(line)
 
 
+def check_videos(queries, video_dir):
+    """Check the exact corpus implied by the selected CSV rows, in index order."""
+    ids = list(dict.fromkeys(row["target"] for row in queries))
+    missing = [video_dir / f"{vid}.mp4" for vid in ids
+               if not (video_dir / f"{vid}.mp4").is_file()]
+    if missing:
+        examples = ", ".join(str(path) for path in missing[:5])
+        raise FileNotFoundError(f"Missing {len(missing)} of {len(ids)} video files: {examples}")
+    return ids
+
+
 @contextmanager
 def output_file(path):
     """Publish completed output atomically, keeping an earlier run on failure."""

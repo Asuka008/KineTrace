@@ -2,8 +2,8 @@ import argparse
 import json
 from pathlib import Path
 
-from .data import read_queries, read_run, write_run
-from .ranking import rerank_prefix, summarize
+from .data import check_videos, read_queries, read_run, write_run
+from .ranking import rerank_prefix, summarize, target_ranks
 from .reranker import QWEN_MODEL
 from .retrieval import CLIP_MODEL
 
@@ -18,27 +18,30 @@ def positive(value):
 def parser():
     cli = argparse.ArgumentParser(description="KineTrace video search")
     commands = cli.add_subparsers(dest="command", required=True)
+    check = commands.add_parser("check-data", help="check split rows and MP4 paths before submitting")
     build = commands.add_parser("build", help="encode clips and persist a FAISS index")
     search = commands.add_parser("search", help="search an existing index with free text")
     evaluate = commands.add_parser("retrieve", help="retrieve candidates for a labeled CSV")
     rerank = commands.add_parser("rerank", help="apply Qwen to a saved candidate prefix")
     metrics = commands.add_parser("metrics", help="report text-to-video Recall@K")
+    ranks = commands.add_parser("target-ranks", help="export the target rank for each labeled query")
 
     for cmd in (build, search, evaluate, rerank):
         cmd.add_argument("--device", choices=("cuda", "cpu"), default="cuda")
     for cmd in (build, search, evaluate):
         cmd.add_argument("--index", type=Path, required=True)
-    for cmd in (build, evaluate):
+    for cmd in (check, build, evaluate):
         cmd.add_argument("--csv", type=Path, required=True)
         cmd.add_argument("--limit", type=positive, help="read only the first N query rows")
-    for cmd in (build, rerank):
+    for cmd in (check, build, rerank):
         cmd.add_argument("--videos", required=True, type=Path)
+    for cmd in (build, rerank):
         cmd.add_argument("--frames", type=positive, default=4)
     for cmd in (search, evaluate, rerank):
         cmd.add_argument("--top-k", type=positive, default=5 if cmd is rerank else 20)
-    for cmd in (evaluate, rerank):
+    for cmd in (evaluate, rerank, ranks):
         cmd.add_argument("--out", required=True, type=Path)
-    for cmd in (rerank, metrics):
+    for cmd in (rerank, metrics, ranks):
         cmd.add_argument("--input", required=True, type=Path)
     build.add_argument("--clip-model", default=CLIP_MODEL, help="HF model ID or local snapshot")
     search.add_argument("--query", required=True)
@@ -50,6 +53,15 @@ def parser():
 
 
 def run(args):
+    if args.command == "check-data":
+        queries = read_queries(args.csv, args.limit)
+        ids = check_videos(queries, args.videos)
+        return {"queries": len(queries), "videos": len(ids)}
+    if args.command == "target-ranks":
+        if args.input.resolve() == args.out.resolve():
+            raise ValueError("Choose a separate output for target ranks")
+        write_run(args.out, target_ranks(read_run(args.input)))
+        return {"target_ranks": str(args.out)}
     if args.command == "metrics":
         return summarize(read_run(args.input))
     if args.command == "rerank":

@@ -4,6 +4,7 @@ import json
 import tempfile
 from pathlib import Path
 
+from .data import check_videos
 from .video import read_clip
 
 CLIP_MODEL = "openai/clip-vit-base-patch32"
@@ -42,11 +43,7 @@ def build_index(args, queries):
     index_dir = args.index
     if index_dir.exists():
         raise FileExistsError(f"Choose a new index directory: {index_dir}")
-    ids = list(dict.fromkeys(row["target"] for row in queries))
-    for video_id in ids:
-        path = args.videos / f"{video_id}.mp4"
-        if not path.is_file():
-            raise FileNotFoundError(path)
+    ids = check_videos(queries, args.videos)
     encoder = ClipEncoder(args.clip_model, args.device)
     index = faiss.IndexFlatIP(encoder.model.config.projection_dim)
     for video_id in ids:

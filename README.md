@@ -59,6 +59,14 @@ export MSRVTT_CSV=/absolute/path/to/MSRVTT_JSFUSION_test.csv
 export VIDEO_DIR=/absolute/path/to/MSRVTT/videos
 ```
 
+On the login node, check the pilot input before requesting a GPU:
+
+```bash
+python -m kinetrace check-data --csv "$MSRVTT_CSV" --videos "$VIDEO_DIR" --limit 32
+```
+
+This reads the same CSV prefix as the index builder and checks for an MP4 per distinct video ID. For the official 1K-A pilot expect 32 queries and 32 videos. Multiple captions for one clip in a custom split count as separate queries. Omit `--limit` to check the full split. Frame decoding is first exercised by the GPU job.
+
 If compute nodes are offline, prefetch the CLIP snapshot on a network-enabled server node into a shared cache. Keep the same `HF_HOME` in the GPU allocation. Prefetch Qwen separately before the first rerank.
 
 ```bash
@@ -77,6 +85,16 @@ sbatch -A YOUR_ACCOUNT -p YOUR_PARTITION --gres=YOUR_GPU_RESOURCE scripts/baseli
 ```
 
 For a cluster using a generic single GPU resource, the argument is `--gres=gpu:1`. Select the site's MIG resource when required. Output goes to `runs/<job-id>/`. Check `device.txt`, `metrics.json` and one row of `retrieval.jsonl`. For the full baseline set `export QUERY_LIMIT=all` and submit again. With the official 1K-A file, verify 1,000 indexed videos and 1,000 evaluated queries. A pilot on a 32-video corpus is only a plumbing check.
+
+Inspect the pilot after Slurm finishes:
+
+```bash
+RUN=runs/YOUR_BASELINE_JOB_ID
+cat "$RUN/device.txt" "$RUN/build.json" "$RUN/metrics.json"
+head -n 3 "$RUN/target-ranks.jsonl"
+```
+
+Each target-rank row gives the query, expected video, first result, saved candidate depth and one-based target rank. A JSON `null` rank means the expected video fell outside that list. To inspect a labeled reranked run, use `python -m kinetrace target-ranks --input "$RUN/reranked.jsonl" --out "$RUN/reranked-target-ranks.jsonl"`.
 
 ### Compare rankings on an allocated GPU
 
