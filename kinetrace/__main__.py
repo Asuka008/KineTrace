@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 
 from .data import check_videos, read_queries, read_run, write_run
-from .ranking import rerank_prefix, summarize, target_ranks
+from .ranking import compare_top1, rerank_prefix, summarize, target_ranks
 from .reranker import QWEN_MODEL
 from .retrieval import CLIP_MODEL
 
@@ -24,6 +24,7 @@ def parser():
     evaluate = commands.add_parser("retrieve", help="retrieve candidates for a labeled CSV")
     rerank = commands.add_parser("rerank", help="apply Qwen to a saved candidate prefix")
     metrics = commands.add_parser("metrics", help="report text-to-video Recall@K")
+    compare = commands.add_parser("compare-top1", help="show queries promoted to or displaced from first place")
     ranks = commands.add_parser("target-ranks", help="export the target rank for each labeled query")
 
     for cmd in (build, search, evaluate, rerank):
@@ -41,7 +42,7 @@ def parser():
         cmd.add_argument("--top-k", type=positive, default=5 if cmd is rerank else 20)
     for cmd in (evaluate, rerank, ranks):
         cmd.add_argument("--out", required=True, type=Path)
-    for cmd in (rerank, metrics, ranks):
+    for cmd in (rerank, metrics, ranks, compare):
         cmd.add_argument("--input", required=True, type=Path)
     build.add_argument("--clip-model", default=CLIP_MODEL, help="HF model ID or local snapshot")
     search.add_argument("--query", required=True)
@@ -62,6 +63,8 @@ def run(args):
             raise ValueError("Choose a separate output for target ranks")
         write_run(args.out, target_ranks(read_run(args.input)))
         return {"target_ranks": str(args.out)}
+    if args.command == "compare-top1":
+        return compare_top1(read_run(args.input))
     if args.command == "metrics":
         return summarize(read_run(args.input))
     if args.command == "rerank":

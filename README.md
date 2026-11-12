@@ -13,16 +13,21 @@ Find a short clip from a description such as “a red car skids on a wet road, t
 
 **School-server pilot.** Run `pilot32-20261112-204808` used the first 32 JSFusion queries and their 32 videos, with four frames per video and 20 saved candidates. PyTorch reported 16.00 GiB visible on an NVIDIA H200 NVL MIG 1g.18gb. The server's Git ownership check prevented capture of the run's commit hash.
 
-| Metric | Hits / queries | Recall |
+| Metric | Frozen CLIP | Qwen rerank (top 5) |
 | --- | ---: | ---: |
-| R@1 | 24 / 32 | 0.75000 |
-| R@5 | 29 / 32 | 0.90625 |
-| R@10 | 31 / 32 | 0.96875 |
-| R@20 | 31 / 32 | 0.96875 |
+| R@1 | 24/32 (75%) | 26/32 (81.25%) |
+| R@5 | 29/32 | 29/32 |
+| R@10 | 31/32 | 31/32 |
+| R@20 | 31/32 | 31/32 |
 
-These results cover frozen CLIP retrieval on the small pilot corpus. Full 1K-A recall, reranking quality, peak memory usage and latency still await measurement.
+Qwen revision `9887917` scored four frames per candidate. Full 1K-A recall, peak memory usage and latency still await measurement.
 
-The server also completed one Qwen query with five candidates and four frames per candidate using the local model snapshot at revision `9887917`.
+To inspect the individual gains and losses, read the original CLIP ranks preserved in the reranked file. This comparison runs on CPU:
+
+```bash
+RUN=runs/pilot32-20261112-204808
+python -m kinetrace compare-top1 --input "$RUN/reranked-k5.jsonl"
+```
 
 ## GitHub workflow
 

@@ -43,3 +43,30 @@ def summarize(rows):
     if not n:
         raise ValueError("Cannot evaluate an empty run")
     return {"queries": n, "candidate_depth": depth, **{f"R@{k}": v/n for k, v in hits.items()}}
+
+
+def compare_top1(rows):
+    """Compare saved retrieval ranks with the current order of labeled candidates."""
+    totals = {"gained": 0, "lost": 0, "stayed_correct": 0, "stayed_incorrect": 0}
+    changes = []
+    for row in rows:
+        current = next(target_ranks([row]))
+        candidates = row["candidates"]
+        original = sorted(candidates, key=lambda item: item["retrieval_rank"])
+        if [item["retrieval_rank"] for item in original] != list(range(1, len(original) + 1)):
+            raise ValueError(f"Invalid retrieval ranks for {row['query_id']}")
+        original_top = original[0]["video_id"]
+        before = original_top == row["target"]
+        after = current["target_rank"] == 1
+        if before == after:
+            totals["stayed_correct" if after else "stayed_incorrect"] += 1
+            continue
+        outcome = "gained" if after else "lost"
+        totals[outcome] += 1
+        old_rank = next(item["retrieval_rank"] for item in candidates if item["video_id"] == row["target"])
+        changes.append({"outcome": outcome, "query_id": row["query_id"], "query": row["query"],
+                        "target": row["target"], "clip_rank": old_rank, "qwen_rank": current["target_rank"],
+                        "clip_top": original_top, "qwen_top": current["top_video"]})
+    if not sum(totals.values()):
+        raise ValueError("Cannot compare an empty run")
+    return {"queries": sum(totals.values()), **totals, "changes": changes}
