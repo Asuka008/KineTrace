@@ -27,6 +27,11 @@ def parser():
     compare = commands.add_parser("compare-top1", help="show queries promoted to or displaced from first place")
     ranks = commands.add_parser("target-ranks", help="export the target rank for each labeled query")
 
+    review = commands.add_parser("review-lost", help="sample top-one losses for paired video review")
+    review.add_argument("--limit", type=positive, default=5)
+    review.add_argument("--seed", type=int, default=42)
+    review.add_argument("--exclude", nargs="+", default=[], metavar="QUERY_ID")
+
     for cmd in (build, search, evaluate, rerank):
         cmd.add_argument("--device", choices=("cuda", "cpu"), default="cuda")
     for cmd in (build, search, evaluate):
@@ -34,15 +39,15 @@ def parser():
     for cmd in (check, build, evaluate):
         cmd.add_argument("--csv", type=Path, required=True)
         cmd.add_argument("--limit", type=positive, help="read only the first N query rows")
-    for cmd in (check, build, rerank):
+    for cmd in (check, build, rerank, review):
         cmd.add_argument("--videos", required=True, type=Path)
     for cmd in (build, rerank):
         cmd.add_argument("--frames", type=positive, default=4)
     for cmd in (search, evaluate, rerank):
         cmd.add_argument("--top-k", type=positive, default=5 if cmd is rerank else 20)
-    for cmd in (evaluate, rerank, ranks):
+    for cmd in (evaluate, rerank, ranks, review):
         cmd.add_argument("--out", required=True, type=Path)
-    for cmd in (rerank, metrics, ranks, compare):
+    for cmd in (rerank, metrics, ranks, compare, review):
         cmd.add_argument("--input", required=True, type=Path)
     build.add_argument("--clip-model", default=CLIP_MODEL, help="HF model ID or local snapshot")
     search.add_argument("--query", required=True)
@@ -54,6 +59,10 @@ def parser():
 
 
 def run(args):
+    if args.command == "review-lost":
+        from .review import write_review
+
+        return write_review(args)
     if args.command == "check-data":
         queries = read_queries(args.csv, args.limit)
         ids = check_videos(queries, args.videos)

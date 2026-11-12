@@ -20,7 +20,18 @@ Find a short clip from a description such as “a red car skids on a wet road, t
 | R@10 | 31/32 | 31/32 |
 | R@20 | 31/32 | 31/32 |
 
-Qwen revision `9887917` scored four frames per candidate. Full 1K-A recall, peak memory usage and latency still await measurement.
+Qwen revision `9887917` scored four frames per candidate. It promoted two targets to first place and displaced none.
+
+**Full MSR-VTT JSFusion 1K-A baseline.** School-server run `jsfusion1k-20261112-212351` indexed 1,000 videos with four frames each and retrieved 20 candidates per query.
+
+| Metric | Frozen CLIP | CLIP + Qwen (top 5, four frames) |
+| --- | ---: | ---: |
+| R@1 | 28.9% | 38.0% |
+| R@5 | 52.6% | 52.6% |
+| R@10 | 60.6% | 60.6% |
+| R@20 | 70.2% | 70.2% |
+
+Qwen promoted 136 of the 237 targets originally ranked 2–5 and displaced 45 of the 289 targets originally ranked first. It retained 244 first-place hits and finished with 380/1,000, a net gain of 91. Of the 526 queries whose targets were in the shortlist, 146 still ranked their targets below first place after reranking. Peak memory usage and latency await measurement.
 
 To inspect the individual gains and losses, read the original CLIP ranks preserved in the reranked file. This comparison runs on CPU:
 
@@ -28,6 +39,18 @@ To inspect the individual gains and losses, read the original CLIP ranks preserv
 RUN=runs/pilot32-20261112-204808
 python -m kinetrace compare-top1 --input "$RUN/reranked-k5.jsonl"
 ```
+
+On human inspection of q11, the reviewer judged both clips plausible. Qwen's top clip (`video7212`) shows a person walking, singing and walking a dog. The query specifies standing in the road. The labeled target (`video7028`) moved from first to fourth, counting as one benchmark loss.
+
+For a reproducible review of five more losses, run this command in the server terminal:
+
+```bash
+RUN=runs/jsfusion1k-20261112-212351
+python -m kinetrace review-lost --input "$RUN/compare-k5.json" --videos "$HOME/datasets/MSRVTT/videos" \
+    --exclude q11 --seed 42 --limit 5 --out "$RUN/review-lost.html"
+```
+
+Download the HTML from JupyterLab and open it in a browser. It embeds both clips, randomizes their left/right order and hides their model identities until you expand the ranking. Rate each pair, then download the JSON judgments before closing. The benchmark metrics use the original annotations.
 
 ## GitHub workflow
 
