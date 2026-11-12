@@ -1,0 +1,2 @@
+# Server dependencies. Install the CUDA PyTorch pair from README.md first.
+-r requirements-server.txt

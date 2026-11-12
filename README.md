@@ -43,11 +43,14 @@ These commands use the standard library and work offline.
 Use Python 3.11 and a CUDA-enabled PyTorch environment. One installation example for a Linux cluster supporting the CUDA 12.6 wheel follows. Use the wheel that matches the server driver or the matching torch/torchvision pair provided by the cluster. Activate this environment before submitting a job. [Official PyTorch builds](https://pytorch.org/get-started/previous-versions/)
 
 ```bash
-python3.11 -m venv .venv
-source .venv/bin/activate
+mkdir -p "$HOME/conda-envs"
+conda create --prefix "$HOME/conda-envs/kinetrace" python=3.11 pip -y
+conda activate "$HOME/conda-envs/kinetrace"
 python -m pip install torch==2.8.0 torchvision==0.23.0 --index-url https://download.pytorch.org/whl/cu126
-python -m pip install -r requirements-server.txt
+python -m pip install -r requirements.txt
 ```
+
+For later dependency changes, activate the same prefix and run `python -m pip install -r requirements.txt` from the updated checkout.
 
 Prepare the videos as `VIDEO_DIR/video9770.mp4`, etc. Use `MSRVTT_JSFUSION_test.csv` for the official 1K-A evaluation. The loader uses `video_id` and `sentence`, ignores extra CSV columns, and indexes each distinct video ID once. A missing video stops the run with its path. The same format works for a development split. [Split and video acquisition instructions](https://github.com/ArrowLuo/CLIP4Clip#data-preparing) · [Example of the test CSV](https://huggingface.co/datasets/friedrichor/MSR-VTT/blob/main/raw_data/MSRVTT_JSFUSION_test.csv)
 
