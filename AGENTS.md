@@ -4,6 +4,7 @@ This repository belongs to the VLM project. Keep the following workflow across f
 
 - Develop on the local Mac. Run only small offline CPU checks, such as unit tests, CLI checks and fixtures.
 - Use GitHub to synchronize source and configuration. The user pulls the code and runs full tests, training, model inference and benchmarks on the school server.
+- Prefer fixing server-reported errors in repository code. Test and push the fix, then give the user the server pull and rerun commands. Label any temporary server workaround explicitly.
 - Target one visible A100 slice on a 40 GB setup. Read the memory actually visible to PyTorch inside the allocation, and record it with each run. Size jobs from that value.
 - Keep videos, model weights, indexes, experiment output and cluster-specific credentials outside Git. Expose data paths, account, partition and GPU resource through command arguments or the submission environment.
 - On handoff, distinguish locally verified behavior, implemented server commands and measured server results. Keep the README commands in sync with the CLI.

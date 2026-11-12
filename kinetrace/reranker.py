@@ -1,7 +1,13 @@
 """Score a sampled video with the binary head of the Qwen3-VL reranker."""
+from pathlib import Path
+
 from .video import read_clip
 
 QWEN_MODEL = "Qwen/Qwen3-VL-Reranker-2B"
+
+
+# This snapshot has the single default template expected by the 4.57.3 loader.
+QWEN_REVISION = "9887917432733561ed27603b14ea9968af048678"
 
 
 class QwenScorer:
@@ -16,9 +22,10 @@ class QwenScorer:
         dtype = torch.float32
         if device == "cuda":
             dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
-        self.processor = AutoProcessor.from_pretrained(model_path)
+        revision = QWEN_REVISION if model_path == QWEN_MODEL and not Path(model_path).is_dir() else None
+        self.processor = AutoProcessor.from_pretrained(model_path, revision=revision)
         self.model = Qwen3VLForConditionalGeneration.from_pretrained(
-            model_path, dtype=dtype, attn_implementation="sdpa"
+            model_path, revision=revision, dtype=dtype, attn_implementation="sdpa"
         ).eval().to(device)
         vocab = self.processor.tokenizer.get_vocab()
         self.answer_ids = [vocab["no"], vocab["yes"]]

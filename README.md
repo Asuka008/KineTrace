@@ -11,7 +11,18 @@ Find a short clip from a description such as “a red car skids on a wet road, t
 | Evaluation | Read an MSR-VTT JSFusion-style CSV. Save candidate JSONL and text-to-video Recall@1/5/10 plus recall at the saved depth. Metrics use fractions. |
 | Planned experiments | Train a contrastive retrieval head, mine hard negatives, fine-tune a reranker adapter, profile latency and build a Gradio comparison view. See the [project plan](KineTrace-Plan.md). |
 
-**Verification status.** The local smoke suite exercises ranking, data handling and the CLI with fixtures. Real video decoding, model inference, GPU memory, latency and benchmark scores await the school-server run.
+**School-server pilot.** Run `pilot32-20261112-204808` used the first 32 JSFusion queries and their 32 videos, with four frames per video and 20 saved candidates. PyTorch reported 16.00 GiB visible on an NVIDIA H200 NVL MIG 1g.18gb. The server's Git ownership check prevented capture of the run's commit hash.
+
+| Metric | Hits / queries | Recall |
+| --- | ---: | ---: |
+| R@1 | 24 / 32 | 0.75000 |
+| R@5 | 29 / 32 | 0.90625 |
+| R@10 | 31 / 32 | 0.96875 |
+| R@20 | 31 / 32 | 0.96875 |
+
+These results cover frozen CLIP retrieval on the small pilot corpus. Full 1K-A recall, reranking quality, peak memory usage and latency still await measurement.
+
+The server also completed one Qwen query with five candidates and four frames per candidate using the local model snapshot at revision `9887917`.
 
 ## GitHub workflow
 
@@ -73,7 +84,7 @@ If compute nodes are offline, prefetch the CLIP snapshot on a network-enabled se
 export HF_HOME=/absolute/path/to/shared/model-cache
 hf download openai/clip-vit-base-patch32 --include '*.json' '*.txt' 'pytorch_model.bin'
 # Later, for stage two
-hf download Qwen/Qwen3-VL-Reranker-2B --include '*.json' '*.txt' '*.jinja' '*.safetensors'
+hf download Qwen/Qwen3-VL-Reranker-2B --revision 9887917432733561ed27603b14ea9968af048678 --include '*.json' '*.txt' '*.jinja' '*.safetensors'
 ```
 
 ### First GPU job
@@ -97,6 +108,18 @@ head -n 3 "$RUN/target-ranks.jsonl"
 Each target-rank row gives the query, expected video, first result, saved candidate depth and one-based target rank. A JSON `null` rank means the expected video fell outside that list. To inspect a labeled reranked run, use `python -m kinetrace target-ranks --input "$RUN/reranked.jsonl" --out "$RUN/reranked-target-ranks.jsonl"`.
 
 ### Compare rankings on an allocated GPU
+
+For a one-query smoke check, reuse the saved CLIP candidates:
+
+```bash
+RUN=runs/pilot32-20261112-204808
+head -n 1 "$RUN/retrieval.jsonl" > "$RUN/first-query.jsonl"
+python -m kinetrace rerank --input "$RUN/first-query.jsonl" --videos "$VIDEO_DIR" \
+    --top-k 5 --frames 4 --out "$RUN/first-query-ranked.jsonl"
+python -m kinetrace metrics --input "$RUN/first-query-ranked.jsonl"
+```
+
+For a paired comparison across all pilot queries:
 
 ```bash
 RUN=runs/YOUR_BASELINE_JOB_ID
