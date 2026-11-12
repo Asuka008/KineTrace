@@ -23,6 +23,7 @@ def parser():
     search = commands.add_parser("search", help="search an existing index with free text")
     evaluate = commands.add_parser("retrieve", help="retrieve candidates for a labeled CSV")
     rerank = commands.add_parser("rerank", help="apply Qwen to a saved candidate prefix")
+    depths = commands.add_parser("compare-depths", help="measure paired Top-5 and Top-10 reranking")
     metrics = commands.add_parser("metrics", help="report text-to-video Recall@K")
     compare = commands.add_parser("compare-top1", help="show queries promoted to or displaced from first place")
     ranks = commands.add_parser("target-ranks", help="export the target rank for each labeled query")
@@ -32,33 +33,38 @@ def parser():
     review.add_argument("--seed", type=int, default=42)
     review.add_argument("--exclude", nargs="+", default=[], metavar="QUERY_ID")
 
-    for cmd in (build, search, evaluate, rerank):
+    for cmd in (build, search, evaluate, rerank, depths):
         cmd.add_argument("--device", choices=("cuda", "cpu"), default="cuda")
     for cmd in (build, search, evaluate):
         cmd.add_argument("--index", type=Path, required=True)
     for cmd in (check, build, evaluate):
         cmd.add_argument("--csv", type=Path, required=True)
         cmd.add_argument("--limit", type=positive, help="read only the first N query rows")
-    for cmd in (check, build, rerank, review):
+    for cmd in (check, build, rerank, review, depths):
         cmd.add_argument("--videos", required=True, type=Path)
-    for cmd in (build, rerank):
+    for cmd in (build, rerank, depths):
         cmd.add_argument("--frames", type=positive, default=4)
     for cmd in (search, evaluate, rerank):
         cmd.add_argument("--top-k", type=positive, default=5 if cmd is rerank else 20)
-    for cmd in (evaluate, rerank, ranks, review):
+    for cmd in (evaluate, rerank, ranks, review, depths):
         cmd.add_argument("--out", required=True, type=Path)
-    for cmd in (rerank, metrics, ranks, compare, review):
+    for cmd in (rerank, metrics, ranks, compare, review, depths):
         cmd.add_argument("--input", required=True, type=Path)
     build.add_argument("--clip-model", default=CLIP_MODEL, help="HF model ID or local snapshot")
     search.add_argument("--query", required=True)
     search.add_argument("--retrieval-text", help="optional English rendering for the CLIP encoder")
     search.add_argument("--out", type=Path, help="save a single-query candidate run for reranking")
     evaluate.add_argument("--text-batch", default=8, type=positive)
-    rerank.add_argument("--qwen-model", default=QWEN_MODEL, help="HF model ID or local snapshot")
+    for cmd in (rerank, depths):
+        cmd.add_argument("--qwen-model", default=QWEN_MODEL, help="HF model ID or local snapshot")
     return cli
 
 
 def run(args):
+    if args.command == "compare-depths":
+        from .depths import compare_depths
+
+        return compare_depths(args)
     if args.command == "review-lost":
         from .review import write_review
 

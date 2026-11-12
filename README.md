@@ -54,6 +54,21 @@ Download the HTML from JupyterLab and open it in a browser. It embeds both clips
 
 Choose `audio_required` when the available visuals leave a decisive spoken or acoustic detail unresolved. For q34, walking is visible, but the subject of the conversation (“their culture”) can require speech or captions. A visible mismatch can still rule out a clip. The current reranker receives sampled frames and query text.
 
+The five-case review marked only the labeled target as relevant for q231, q122 and q394, and both clips for q443 and q901. The saved judgment for q901 is `both`; its spoken topic remains unverified from silent playback.
+
+### Compare reranking depths on the same shortlist
+
+On the allocated GPU, reuse the full run and the same four-frame Qwen snapshot:
+
+```bash
+RUN=runs/jsfusion1k-20261112-212351
+python -m kinetrace compare-depths --input "$RUN/retrieval.jsonl" --videos "$HOME/datasets/MSRVTT/videos" \
+    --qwen-model "$HOME/models/Qwen3-VL-Reranker-2B-9887917" --device cuda --frames 4 \
+    --out "$RUN/reranked-k10.jsonl" > "$RUN/depths-5-10.json" && cat "$RUN/depths-5-10.json"
+```
+
+The command warms up with one query and then measures all queries. For each query it scores ranks 1–5 once and extends to 10, preserving the CLIP order on score ties. The report includes paired Recall, gains and losses versus Top-5, and cumulative reranking time per query (p50/p95 in milliseconds, including decoding and synchronized GPU scoring; model loading, retrieval and file I/O for results are excluded). Both depths use the system's existing filesystem cache.
+
 ## GitHub workflow
 
 Use this project directory as the repository root. The GitHub remote is https://github.com/Asuka008/KineTrace.git. For an empty remote, run the commands below on the Mac. If you already have a repository with commits, start from its clone and copy these source files into that checkout.
