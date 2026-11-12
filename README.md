@@ -52,6 +52,8 @@ python -m kinetrace review-lost --input "$RUN/compare-k5.json" --videos "$HOME/d
 
 Download the HTML from JupyterLab and open it in a browser. It embeds both clips, randomizes their left/right order and hides their model identities until you expand the ranking. Rate each pair, then download the JSON judgments before closing. The benchmark metrics use the original annotations.
 
+Choose `audio_required` when the available visuals leave a decisive spoken or acoustic detail unresolved. For q34, walking is visible, but the subject of the conversation (“their culture”) can require speech or captions. A visible mismatch can still rule out a clip. The current reranker receives sampled frames and query text.
+
 ## GitHub workflow
 
 Use this project directory as the repository root. The GitHub remote is https://github.com/Asuka008/KineTrace.git. For an empty remote, run the commands below on the Mac. If you already have a repository with commits, start from its clone and copy these source files into that checkout.

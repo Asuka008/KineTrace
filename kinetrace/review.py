@@ -48,6 +48,7 @@ select,button{font:inherit;padding:.3em}details,label{display:block;margin:.6em 
             page.write('''</div><label>符合描述的片段 <select>
 <option value="">尚未评判</option><option value="A">仅 A</option><option value="B">仅 B</option>
 <option value="both">两段都符合</option><option value="neither">两段都不符合</option>
+<option value="audio_required">需要声音才能判断</option>
 <option value="uncertain">无法判断</option></select></label>''')
             page.write(f'<details><summary>查看视频编号与排名</summary>A = {escape(a)}，B = {escape(b)}。'
                        f'标注目标 {escape(row["target"])} 从第 {int(row["clip_rank"])} 降至第 '
