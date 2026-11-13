@@ -105,6 +105,30 @@ For a larger training-side comparison, use the same base, four frames, fixed see
 SFT_TRAIN_VIDEOS=256 SFT_VAL_VIDEOS=128 SFT_STEPS=256 bash scripts/sft_pilot.sh
 ```
 
+Server run `sft-pilot-zxCXNv5N` trained for 256 updates on 256 available positive/negative pairs. PyTorch reported 4.104 GiB peak allocated on the H200 NVL MIG slice with 16.0 GiB visible. On the same 128 validation queries, CLIP ranked 69 targets first, base Qwen ranked 77 first and adapted Qwen ranked 82 first. All three placed 105 targets in the top five. Relative to base Qwen, the adapter gained seven first-place hits and lost two (+3.91 percentage points at R@1).
+
+To evaluate this fixed checkpoint on JSFusion 1K-A, reuse the original CLIP candidates and the existing base-Qwen Top-5 run. Store the evaluation alongside this adapter:
+
+```bash
+EVAL=runs/jsfusion1k-20261112-212351
+SFT=runs/sft-pilot-zxCXNv5N
+python -m kinetrace rerank --input "$EVAL/retrieval.jsonl" --videos "$HOME/datasets/MSRVTT/videos" \
+    --qwen-model "$HOME/models/Qwen3-VL-Reranker-2B-9887917" --adapter "$SFT/adapter" \
+    --top-k 5 --frames 4 --device cuda --out "$SFT/test1k-k5.jsonl" && \
+python -m kinetrace metrics --input "$SFT/test1k-k5.jsonl" > "$SFT/test1k-metrics.json" && \
+python -m kinetrace compare-runs --baseline "$EVAL/reranked-k5.jsonl" --input "$SFT/test1k-k5.jsonl" > "$SFT/test1k-paired.json"
+```
+
+On JSFusion 1K-A, base Qwen ranked 380 of 1,000 targets first and the adapter ranked 365 first (18 gains and 33 losses). To inspect the changed cases, sample ten from each group directly from the saved comparison on the school server:
+
+```bash
+SFT=runs/sft-pilot-zxCXNv5N
+python -m kinetrace review-changes --input "$SFT/test1k-paired.json" --videos "$HOME/datasets/MSRVTT/videos" \
+    --seed 42 --per-outcome 10 --out "$SFT/test1k-review.html"
+```
+
+Download the HTML from JupyterLab and open it locally. It mixes the two groups, shuffles the two clips for each query and keeps ranks and model names off the page. Export the judgments before closing. Match the exported query IDs and A/B video IDs to `test1k-paired.json` for analysis. Each group is sampled separately, so report judgments by group.
+
 ## GitHub workflow
 
 Use this project directory as the repository root. The GitHub remote is https://github.com/Asuka008/KineTrace.git. For an empty remote, run the commands below on the Mac. If you already have a repository with commits, start from its clone and copy these source files into that checkout.

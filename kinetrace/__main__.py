@@ -37,7 +37,10 @@ def parser():
 
     review = commands.add_parser("review-lost", help="sample top-one losses for paired video review")
     review.add_argument("--limit", type=positive, default=5)
-    review.add_argument("--seed", type=int, default=42)
+    changes = commands.add_parser("review-changes", help="blind review of gains and losses from compare-runs")
+    changes.add_argument("--per-outcome", type=positive, default=10, help="maximum cases per group")
+    for cmd in (review, changes):
+        cmd.add_argument("--seed", type=int, default=42)
     review.add_argument("--exclude", nargs="+", default=[], metavar="QUERY_ID")
 
     for cmd in (build, search, evaluate, rerank, depths, train):
@@ -47,15 +50,15 @@ def parser():
     for cmd in (check, build, evaluate):
         cmd.add_argument("--csv", type=Path, required=True)
         cmd.add_argument("--limit", type=positive, help="read only the first N query rows")
-    for cmd in (check, build, rerank, review, depths, train):
+    for cmd in (check, build, rerank, review, changes, depths, train):
         cmd.add_argument("--videos", required=True, type=Path)
     for cmd in (build, rerank, depths, train):
         cmd.add_argument("--frames", type=positive, default=4)
     for cmd in (search, evaluate, rerank):
         cmd.add_argument("--top-k", type=positive, default=5 if cmd is rerank else 20)
-    for cmd in (evaluate, rerank, ranks, review, depths, train):
+    for cmd in (evaluate, rerank, ranks, review, changes, depths, train):
         cmd.add_argument("--out", required=True, type=Path)
-    for cmd in (rerank, metrics, ranks, compare, review, depths, train):
+    for cmd in (rerank, metrics, ranks, compare, review, changes, depths, train):
         cmd.add_argument("--input", required=True, type=Path)
     build.add_argument("--clip-model", default=CLIP_MODEL, help="HF model ID or local snapshot")
     search.add_argument("--query", required=True)
@@ -76,7 +79,7 @@ def run(args):
         from .depths import compare_depths
 
         return compare_depths(args)
-    if args.command == "review-lost":
+    if args.command in ("review-lost", "review-changes"):
         from .review import write_review
 
         return write_review(args)
