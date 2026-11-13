@@ -27,6 +27,8 @@ def parser():
     train = commands.add_parser("train-lora", help="fit a yes/no Qwen adapter on train-side CLIP candidates")
     train.add_argument("--steps", type=positive, default=1, help="positive/negative pairs of updates (one optimizer step per pair)")
     train.add_argument("--seed", type=int, default=42)
+    train.add_argument("--negative-strategy", choices=("hard", "random"), default="hard",
+                       help="use the highest-ranked eligible CLIP candidate or sample a training video uniformly")
     rerank.add_argument("--adapter", type=Path, help="load a trained PEFT adapter on the selected Qwen base")
     metrics = commands.add_parser("metrics", help="report text-to-video Recall@K")
     compare = commands.add_parser("compare-top1", help="show queries promoted to or displaced from first place")

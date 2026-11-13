@@ -129,6 +129,18 @@ python -m kinetrace review-changes --input "$SFT/test1k-paired.json" --videos "$
 
 Download the HTML from JupyterLab and open it locally. It mixes the two groups, shuffles the two clips for each query and keeps ranks and model names off the page. Export the judgments before closing. Match the exported query IDs and A/B video IDs to `test1k-paired.json` for analysis. Each group is sampled separately, so report judgments by group.
 
+### Compare random and CLIP-mined training negatives
+
+From the server checkout in the same GPU environment, run:
+
+```bash
+python -m scripts.compare_sft_negatives runs/sft-pilot-zxCXNv5N
+```
+
+The driver trains one fresh adapter from the original Qwen base. It reads the frames, step count, device and seed from the saved hard-negative training report. For each query that had a usable CLIP negative, it samples one video uniformly from the distinct targets in the training run, excluding all labeled targets for that normalized caption. A separate random generator keeps the positive examples and their shuffled training order matched. The new adapter includes the sampled `training-pairs.jsonl` for inspection.
+
+The driver scores the new adapter on the saved validation shortlist and reuses the existing base and hard-negative rankings. It prints R@1, R@5 and paired gains and losses, and writes per-query changes to `random-negative-*/validation.json` inside the pilot directory. In `hard_to_random`, a gain means that switching from the hard-negative adapter to the random-negative adapter moved the labeled target to first place. For the 256-step pilot, the reference counts are 77/128 for base Qwen and 82/128 for hard-negative LoRA.
+
 ## GitHub workflow
 
 Use this project directory as the repository root. The GitHub remote is https://github.com/Asuka008/KineTrace.git. For an empty remote, run the commands below on the Mac. If you already have a repository with commits, start from its clone and copy these source files into that checkout.
