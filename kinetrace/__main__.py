@@ -24,6 +24,10 @@ def parser():
     evaluate = commands.add_parser("retrieve", help="retrieve candidates for a labeled CSV")
     rerank = commands.add_parser("rerank", help="apply Qwen to a saved candidate prefix")
     depths = commands.add_parser("compare-depths", help="measure paired Top-5 and Top-10 reranking")
+    train = commands.add_parser("train-lora", help="fit a yes/no Qwen adapter on train-side CLIP candidates")
+    train.add_argument("--steps", type=positive, default=1, help="positive/negative pairs of updates (one optimizer step per pair)")
+    train.add_argument("--seed", type=int, default=42)
+    rerank.add_argument("--adapter", type=Path, help="load a trained PEFT adapter on the selected Qwen base")
     metrics = commands.add_parser("metrics", help="report text-to-video Recall@K")
     compare = commands.add_parser("compare-top1", help="show queries promoted to or displaced from first place")
     ranks = commands.add_parser("target-ranks", help="export the target rank for each labeled query")
@@ -33,34 +37,38 @@ def parser():
     review.add_argument("--seed", type=int, default=42)
     review.add_argument("--exclude", nargs="+", default=[], metavar="QUERY_ID")
 
-    for cmd in (build, search, evaluate, rerank, depths):
+    for cmd in (build, search, evaluate, rerank, depths, train):
         cmd.add_argument("--device", choices=("cuda", "cpu"), default="cuda")
     for cmd in (build, search, evaluate):
         cmd.add_argument("--index", type=Path, required=True)
     for cmd in (check, build, evaluate):
         cmd.add_argument("--csv", type=Path, required=True)
         cmd.add_argument("--limit", type=positive, help="read only the first N query rows")
-    for cmd in (check, build, rerank, review, depths):
+    for cmd in (check, build, rerank, review, depths, train):
         cmd.add_argument("--videos", required=True, type=Path)
-    for cmd in (build, rerank, depths):
+    for cmd in (build, rerank, depths, train):
         cmd.add_argument("--frames", type=positive, default=4)
     for cmd in (search, evaluate, rerank):
         cmd.add_argument("--top-k", type=positive, default=5 if cmd is rerank else 20)
-    for cmd in (evaluate, rerank, ranks, review, depths):
+    for cmd in (evaluate, rerank, ranks, review, depths, train):
         cmd.add_argument("--out", required=True, type=Path)
-    for cmd in (rerank, metrics, ranks, compare, review, depths):
+    for cmd in (rerank, metrics, ranks, compare, review, depths, train):
         cmd.add_argument("--input", required=True, type=Path)
     build.add_argument("--clip-model", default=CLIP_MODEL, help="HF model ID or local snapshot")
     search.add_argument("--query", required=True)
     search.add_argument("--retrieval-text", help="optional English rendering for the CLIP encoder")
     search.add_argument("--out", type=Path, help="save a single-query candidate run for reranking")
     evaluate.add_argument("--text-batch", default=8, type=positive)
-    for cmd in (rerank, depths):
+    for cmd in (rerank, depths, train):
         cmd.add_argument("--qwen-model", default=QWEN_MODEL, help="HF model ID or local snapshot")
     return cli
 
 
 def run(args):
+    if args.command == "train-lora":
+        from .sft import train_lora
+
+        return train_lora(args)
     if args.command == "compare-depths":
         from .depths import compare_depths
 
@@ -86,6 +94,10 @@ def run(args):
         from .reranker import QwenScorer
 
         scorer = QwenScorer(args.qwen_model, args.device, args.videos, args.frames)
+        if args.adapter:
+            from peft import PeftModel
+
+            scorer.model = PeftModel.from_pretrained(scorer.model, str(args.adapter)).eval()
         rows = (rerank_prefix(row, args.top_k, scorer) for row in read_run(args.input))
         write_run(args.out, rows)
         return {"run": str(args.out), "rerank_top_k": args.top_k, "frames": args.frames}

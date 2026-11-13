@@ -31,7 +31,7 @@ Qwen revision `9887917` scored four frames per candidate. It promoted two target
 | R@10 | 60.6% | 60.6% |
 | R@20 | 70.2% | 70.2% |
 
-Qwen promoted 136 of the 237 targets originally ranked 2–5 and displaced 45 of the 289 targets originally ranked first. It retained 244 first-place hits and finished with 380/1,000, a net gain of 91. Of the 526 queries whose targets were in the shortlist, 146 still ranked their targets below first place after reranking. Peak memory usage and latency await measurement.
+Qwen promoted 136 of the 237 targets originally ranked 2–5 and displaced 45 of the 289 targets originally ranked first. It retained 244 first-place hits and finished with 380/1,000, a net gain of 91. Of the 526 queries whose targets were in the shortlist, 146 still ranked their targets below first place after reranking. End-to-end search latency and peak inference memory await measurement.
 
 To inspect the individual gains and losses, read the original CLIP ranks preserved in the reranked file. This comparison runs on CPU:
 
@@ -68,6 +68,27 @@ python -m kinetrace compare-depths --input "$RUN/retrieval.jsonl" --videos "$HOM
 ```
 
 The command warms up with one query and then measures all queries. For each query it scores ranks 1–5 once and extends to 10, preserving the CLIP order on score ties. The report includes paired Recall, gains and losses versus Top-5, and cumulative reranking time per query (p50/p95 in milliseconds, including decoding and synchronized GPU scoring; model loading, retrieval and file I/O for results are excluded). Both depths use the system's existing filesystem cache.
+
+The server measured these paired results on the H200 NVL MIG slice with 16.0 GiB visible. Increasing depth gained 22 first-place hits and lost 21 relative to Top-5.
+
+| Depth | R@1 | R@5 | R@10 | R@20 | Rerank p50 | Rerank p95 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 5 | 38.0% | 52.6% | 60.6% | 70.2% | 329.6 ms | 565.6 ms |
+| 10 | 38.1% | 56.5% | 60.6% | 70.2% | 663.7 ms | 982.2 ms |
+
+### Qwen LoRA training pilot
+
+From the school-server checkout in a GPU allocation:
+
+```bash
+conda activate "$HOME/conda-envs/kinetrace"
+python -m pip install -r requirements-sft.txt
+bash scripts/sft_pilot.sh
+```
+
+The driver expects the existing ZIP and test CSV under `MSRVTT_ROOT` (default `~/datasets/MSRVTT`). It downloads the public train_9k captions once, excludes test IDs by checking disjointness, samples 32 training and 16 validation videos by fixed seed, extracts those clips into its run directory, and mines negatives on the training corpus only. Each query provides its labeled clip and the highest-ranked candidate outside the known positives for that caption. Such negatives are weak labels.
+
+One optimizer step accumulates the mean next-token loss for a positive “yes” and a negative “no”, using separate forwards. Only language attention Q/V LoRA parameters train. `SFT_STEPS` defaults to 1 for a backward-pass smoke check. The driver reloads the adapter in a new process and evaluates both versions on the same five candidates per validation query. Inspect `adapter/train-report.json` for loss, gradient norm and peak allocated GPU memory, and `metrics-{base,adapted}.json` for validation Recall. The one-step pilot checks the training path; measuring a quality improvement requires a larger held-out validation corpus and training run. Use `RUN_ROOT` and `QWEN_DIR` to override the output parent and base snapshot.
 
 ## GitHub workflow
 

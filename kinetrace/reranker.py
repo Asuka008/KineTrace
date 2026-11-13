@@ -30,7 +30,7 @@ class QwenScorer:
         vocab = self.processor.tokenizer.get_vocab()
         self.answer_ids = [vocab["no"], vocab["yes"]]
 
-    def __call__(self, query, video_id):
+    def next_token_logits(self, query, video_id):
         import numpy as np
 
         frames, metadata = read_clip(self.video_dir / f"{video_id}.mp4", self.frames)
@@ -51,7 +51,10 @@ class QwenScorer:
         ).to(self.device)
         if "pixel_values_videos" not in inputs:
             raise ValueError(f"Missing visual input for {video_id}")
+        outputs = self.model(**inputs, logits_to_keep=1, use_cache=False)
+        return outputs.logits[0, -1].float()
+
+    def __call__(self, query, video_id):
         with self.torch.inference_mode():
-            outputs = self.model(**inputs, logits_to_keep=1, use_cache=False)
-            logits = outputs.logits[0, -1, self.answer_ids].float()
+            logits = self.next_token_logits(query, video_id)[self.answer_ids]
             return logits.softmax(dim=0)[1].item()
