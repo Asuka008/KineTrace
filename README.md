@@ -90,6 +90,21 @@ The driver expects the existing ZIP and test CSV under `MSRVTT_ROOT` (default `~
 
 One optimizer step accumulates the mean next-token loss for a positive “yes” and a negative “no”, using separate forwards. Only language attention Q/V LoRA parameters train. `SFT_STEPS` defaults to 1 for a backward-pass smoke check. The driver reloads the adapter in a new process and evaluates both versions on the same five candidates per validation query. Inspect `adapter/train-report.json` for loss, gradient norm and peak allocated GPU memory, and `metrics-{base,adapted}.json` for validation Recall. The one-step pilot checks the training path; measuring a quality improvement requires a larger held-out validation corpus and training run. Use `RUN_ROOT` and `QWEN_DIR` to override the output parent and base snapshot.
 
+In server pilot `sft-pilot-88OF3hW6`, one step used one sampled positive/negative pair out of 32 available pairs. The A100-SXM4-80GB MIG 2g.20gb exposed 19.5 GiB. Training reported 1,605,632 trainable parameters, loss 4.8071, pre-clipping gradient norm 14.4618 and peak allocated GPU memory 4.0392 GiB. Reloading the adapter succeeded. On the 16 validation queries, base Qwen hit 15 first places and the adapter hit 14; both retained 16/16 at five.
+
+To inspect exactly which queries changed on the completed pilot, run:
+
+```bash
+RUN=runs/sft-pilot-88OF3hW6
+python -m kinetrace compare-runs --baseline "$RUN/val-base.jsonl" --input "$RUN/val-adapted.jsonl"
+```
+
+For a larger training-side comparison, use the same base, four frames, fixed seed, and Top-5 candidates. The command below samples one caption per video and requests 256 optimizer updates. Inspect `available_pairs` to see how many queries supplied usable negatives. The new validation corpus has 128 candidates per query before CLIP shortlisting; compare the two models within this run. The driver saves the per-query gains and losses to `paired.json`.
+
+```bash
+SFT_TRAIN_VIDEOS=256 SFT_VAL_VIDEOS=128 SFT_STEPS=256 bash scripts/sft_pilot.sh
+```
+
 ## GitHub workflow
 
 Use this project directory as the repository root. The GitHub remote is https://github.com/Asuka008/KineTrace.git. For an empty remote, run the commands below on the Mac. If you already have a repository with commits, start from its clone and copy these source files into that checkout.

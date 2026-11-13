@@ -70,3 +70,40 @@ def compare_top1(rows):
     if not sum(totals.values()):
         raise ValueError("Cannot compare an empty run")
     return {"queries": sum(totals.values()), **totals, "changes": changes}
+
+
+def compare_runs(baseline, evaluated):
+    """Pair by query ID even if the two result files have different row order."""
+    def index(rows):
+        result = {}
+        for row in rows:
+            qid = row["query_id"]
+            if qid in result:
+                raise ValueError(f"Duplicate query ID: {qid}")
+            ranks = next(target_ranks([row]))
+            candidates = frozenset(item["video_id"] for item in row["candidates"])
+            result[qid] = ranks, candidates
+        return result
+
+    before, after = index(baseline), index(evaluated)
+    if not before or before.keys() != after.keys():
+        raise ValueError("Expected identical, nonempty query ID sets")
+    changes = []
+    base_hits = new_hits = gained = lost = 0
+    for qid, (old, old_ids) in before.items():
+        new, new_ids = after[qid]
+        if old_ids != new_ids or old["target"] != new["target"] or old["query"] != new["query"]:
+            raise ValueError(f"Query, label or candidate membership mismatch for {qid}")
+        was_hit = old["target_rank"] == 1
+        is_hit = new["target_rank"] == 1
+        base_hits += was_hit
+        new_hits += is_hit
+        if was_hit != is_hit:
+            gained += is_hit
+            lost += was_hit
+            changes.append({"query_id": qid, "query": old["query"], "target": old["target"],
+                            "outcome": "gained" if is_hit else "lost",
+                            "baseline_top": old["top_video"], "evaluated_top": new["top_video"],
+                            "baseline_rank": old["target_rank"], "evaluated_rank": new["target_rank"]})
+    return {"queries": len(before), "baseline_hits": base_hits, "evaluated_hits": new_hits,
+            "gained": gained, "lost": lost, "net": new_hits - base_hits, "changes": changes}

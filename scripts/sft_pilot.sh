@@ -16,7 +16,8 @@ if [[ ! -s "$annotations" ]]; then
     mv "$tmp" "$annotations"
 fi
 python scripts/prepare_sft_pilot.py --train-json "$annotations" \
-    --test-csv "$root/MSRVTT_JSFUSION_test.csv" --archive "$root/MSRVTT_Videos.zip" --out "$run/data"
+    --test-csv "$root/MSRVTT_JSFUSION_test.csv" --archive "$root/MSRVTT_Videos.zip" --out "$run/data" \
+    --train-size "${SFT_TRAIN_VIDEOS:-32}" --val-size "${SFT_VAL_VIDEOS:-16}"
 videos="$run/data/videos"
 for split in train val; do
     python -m kinetrace build --csv "$run/data/$split.csv" --videos "$videos" \
@@ -33,3 +34,5 @@ for variant in base adapted; do
         --top-k 5 --frames 4 "${opts[@]}" --out "$run/val-$variant.jsonl"
     python -m kinetrace metrics --input "$run/val-$variant.jsonl" | tee "$run/metrics-$variant.json"
 done
+python -m kinetrace compare-runs --baseline "$run/val-base.jsonl" --input "$run/val-adapted.jsonl" > "$run/paired.json"
+python -c 'import json, sys; r=json.load(open(sys.argv[1])); print({k:v for k,v in r.items() if k != "changes"})' "$run/paired.json"

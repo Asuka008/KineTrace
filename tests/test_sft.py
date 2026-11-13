@@ -5,6 +5,7 @@ import zipfile
 from pathlib import Path
 
 from kinetrace.data import read_queries
+from kinetrace.ranking import compare_runs
 from kinetrace.sft import training_pairs
 from scripts.prepare_sft_pilot import prepare
 
@@ -16,6 +17,18 @@ class SftPilot(unittest.TestCase):
         rows = [{"query": "skiing", "target": "a", "candidates": candidates},
                 {"query": "Skiing", "target": "b", "candidates": candidates}]
         self.assertEqual(training_pairs(rows), [("skiing", "a", "c"), ("Skiing", "b", "c")])
+
+    def test_compare_runs_pairs_by_id_and_rejects_changed_candidates(self):
+        def row(qid, ids):
+            return {"query_id": qid, "query": qid, "target": "a",
+                    "candidates": [{"video_id": v} for v in ids]}
+        base = [row("q1", "ab"), row("q2", "ba")]
+        new = [row("q2", "ab"), row("q1", "ba")]
+        report = compare_runs(base, new)
+        self.assertEqual((report["gained"], report["lost"], report["net"]), (1, 1, 0))
+        self.assertEqual([r["query_id"] for r in report["changes"]], ["q1", "q2"])
+        with self.assertRaisesRegex(ValueError, "membership mismatch"):
+            compare_runs(base, [row("q1", "ac"), new[0]])
 
     def test_split_extract_and_reject_test_overlap(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -32,6 +45,9 @@ class SftPilot(unittest.TestCase):
                           for split in ("train", "val")]
             self.assertEqual((len(train), len(val), train & val), (32, 16, set()))
             self.assertEqual({p.stem for p in (out / "videos").iterdir()}, train | val)
+            large = root / "custom"
+            prepare(data, held, archive, large, 42, train_size=25, val_size=20)
+            self.assertEqual([len(read_queries(large / f"{s}.csv")) for s in ("train", "val")], [25, 20])
             held.write_text("video_id,sentence\nvideo0,test\n")
             with self.assertRaisesRegex(ValueError, "test video ID"):
                 prepare(data, held, archive, root / "bad", 42)

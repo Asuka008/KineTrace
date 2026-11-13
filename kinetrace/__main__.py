@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 
 from .data import check_videos, read_queries, read_run, write_run
-from .ranking import compare_top1, rerank_prefix, summarize, target_ranks
+from .ranking import compare_runs, compare_top1, rerank_prefix, summarize, target_ranks
 from .reranker import QWEN_MODEL
 from .retrieval import CLIP_MODEL
 
@@ -30,6 +30,9 @@ def parser():
     rerank.add_argument("--adapter", type=Path, help="load a trained PEFT adapter on the selected Qwen base")
     metrics = commands.add_parser("metrics", help="report text-to-video Recall@K")
     compare = commands.add_parser("compare-top1", help="show queries promoted to or displaced from first place")
+    paired = commands.add_parser("compare-runs", help="compare first-place hits on identical labeled shortlists")
+    paired.add_argument("--baseline", required=True, type=Path)
+    paired.add_argument("--input", required=True, type=Path)
     ranks = commands.add_parser("target-ranks", help="export the target rank for each labeled query")
 
     review = commands.add_parser("review-lost", help="sample top-one losses for paired video review")
@@ -86,6 +89,8 @@ def run(args):
             raise ValueError("Choose a separate output for target ranks")
         write_run(args.out, target_ranks(read_run(args.input)))
         return {"target_ranks": str(args.out)}
+    if args.command == "compare-runs":
+        return compare_runs(read_run(args.baseline), read_run(args.input))
     if args.command == "compare-top1":
         return compare_top1(read_run(args.input))
     if args.command == "metrics":
