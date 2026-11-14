@@ -28,7 +28,7 @@ The LoRA validation run uses 256 available training pairs, 256 optimizer updates
 | Evaluation | Report Recall@K, pair gains/losses by query ID, and export randomized A/B video reviews with judgment tallying |
 | Run artifacts | Save candidates, model settings, sampled training pairs, the last gradient norm and actual visible/peak allocated GPU memory in the server run directory |
 
-Current delivery includes the training/evaluation CLI, a resident-model search API, a browser video comparison view, and an optional contextual-bandit feedback loop. Service and bandit behavior has local CPU fixture coverage. Model-backed service performance and bandit quality gains await school-server measurement.
+Current delivery includes command-line training, inference, paired evaluation and an offline contextual-bandit simulation. The simulation has small CPU fixture coverage. Its quality results await a school-server run.
 
 ## Reproduce the LoRA experiment
 
@@ -98,86 +98,57 @@ python -m kinetrace review-changes --input "$RUN/retained-paired.json" \
 
 </details>
 
-## Search service and browser demo
+## Next experiment — offline contextual bandit
 
-From the school-server checkout inside a GPU allocation, run the service against an existing index and the retained LoRA adapter.
+Run the next experiment from the school-server checkout inside a GPU allocation. Stop the previous foreground service with `Ctrl+C` before starting the experiment.
 
 ```bash
 git pull --ff-only origin main
 conda activate "$HOME/conda-envs/kinetrace"
-python -m pip install -r requirements-service.txt
-python -m kinetrace serve \
-    --index runs/jsfusion1k-20261112-212351/index \
-    --videos "$HOME/datasets/MSRVTT/videos" \
-    --current-sft --device cuda --frames 4 \
-    --host 127.0.0.1 --port 8000 --max-pending 4 --timeout-s 30
+python -m scripts.compare_bandit runs/sft-pilot-zxCXNv5N
 ```
 
-Open `http://127.0.0.1:8000/` through your server's port forwarding. If Jupyter provides a port proxy, use its `/proxy/8000/` URL including the trailing slash. The page shows CLIP and Qwen results side by side with video playback. `/docs` exposes the API schema. Launching without an adapter selects base Qwen, with `--qwen-model` available for a local snapshot.
+The command loads the existing LoRA adapter, scores the saved training candidates once and runs three CPU policy fits with seeds 42, 43 and 44. It reads the base model, frame count and device from the retained adapter's training report. Existing base-Qwen and LoRA validation scores supply the comparison on the same validation candidates. The training and validation galleries are checked for overlap, and training captions shared with validation are excluded from policy fitting.
 
-The service loads CLIP, the FAISS index and Qwen once. One inference thread serializes GPU work, including work still finishing after a request timeout. `--max-pending` bounds active plus queued requests. Overflow returns HTTP 503. A deadline after retrieval or a reranker error returns the complete CLIP ranking with `fallback=true`. A deadline before retrieval completes returns HTTP 504. Startup logs and `/readyz` record the GPU memory actually visible to PyTorch. Successful full reranks include peak allocated and reserved memory, which includes resident models.
+The experiment uses a contextual-bandit simulation. For each eligible training query, epsilon-greedy sampling selects one candidate from the LoRA-scored Top-5. With epsilon 0.1 and five candidates, the first candidate has probability 0.92 and every other candidate has probability 0.02. The sampled reward is 1 for a known training-caption target and 0 otherwise. An inverse-propensity-weighted ridge model learns from these selected-action rewards using CLIP score, LoRA score and reciprocal ranks, plus a bias. The trained model orders the same candidate prefix on validation. [Contextual-bandit formulation and exploration](https://vowpalwabbit.org/docs/vowpal_wabbit/python/latest/tutorials/python_Contextual_bandits_and_Vowpal_Wabbit.html)
+
+This is a small candidate-selection policy trained on frozen model scores. Dataset labels provide simulated rewards. Single-target annotations can assign zero reward to another semantically relevant clip. Validation reports direct labeled Recall and paired gains/losses for every seed, plus the mean and standard deviation of R@1 across seeds. That standard deviation measures sampling variation. Real-user reward improvement requires later independent evidence. The existing 128-query validation split has already informed development, so final claims require a fresh held-out evaluation after settings are fixed.
+
+Outputs go into the printed `bandit-offline-*` directory under the pilot.
+
+| Artifact | Contents |
+| --- | --- |
+| `commit.txt`, `environment.txt`, `provenance.json` | Revision, dependencies, reference settings and input/adapter hashes |
+| `scoring-device.json` | Actual visible GPU memory and scoring allocation/reservation peaks |
+| `train-adapted.jsonl` | Training candidate scores from the retained LoRA |
+| `summary.json` | Base Qwen, LoRA and every policy seed, with query-level paired changes |
+| `comparison/feedback-SEED.jsonl` | Simulated selected actions, exact probabilities and rewards |
+| `comparison/policy-SEED.json` | Learned linear reward model |
+| `comparison/validation-SEED.jsonl` | Validation rankings, preserving the candidate tail |
+
+The detailed report also records positive rewards, selections outside the original first place and training importance-weight effective sample size. Low coverage and a small pilot limit the evidence. All seeds are reported together.
+
+For a CPU-only rerun using saved training scores, set `EXPERIMENT` to the directory printed by the first command and choose a new output directory.
 
 ```bash
-curl http://127.0.0.1:8000/readyz
-curl -X POST http://127.0.0.1:8000/search \
-    -H 'Content-Type: application/json' \
-    -d '{"query":"a person walking a dog","retrieval_k":20,"rerank_k":5}'
+EXPERIMENT=runs/sft-pilot-zxCXNv5N/bandit-offline-REPLACE_WITH_RUN_ID
+python -m kinetrace bandit-compare \
+    --train "$EXPERIMENT/train-adapted.jsonl" \
+    --validation runs/sft-pilot-zxCXNv5N/val-adapted.jsonl \
+    --top-k 5 --epsilon 0.1 --seeds 42 43 44 \
+    --out "$EXPERIMENT/comparison-rerun"
 ```
-
-The response includes `retrieval`, `candidates`, model/index metadata, per-stage timings and fallback status. The health endpoint is `/healthz`. Video serving is limited to existing files belonging to the loaded index. The default listener is loopback for use through an authenticated server tunnel or proxy.
-
-### Measure the service
-
-With the service running, replay queries from a second server terminal. This command uses one client at a time, warms up once and records HTTP latency including queueing, serialization and local network overhead.
-
-```bash
-python -m scripts.benchmark_service \
-    --url http://127.0.0.1:8000 \
-    --csv "$HOME/datasets/MSRVTT/MSRVTT_JSFUSION_test.csv" \
-    --limit 32 --out runs/service-pilot.json
-```
-
-The report contains p50/p95, successful requests per second, error and fallback counts, Recall on successful requests and measured GPU peaks. Remove `--limit` for the complete split. Run benchmark replay with feedback logging disabled so replayed queries stay outside collected human feedback. Concurrent throughput and long-running stability remain future measurements.
-
-## Contextual bandit feedback and training
-
-The first RL extension uses epsilon-greedy selection among the Qwen-scored candidates. It learns a small linear reward model from query-dependent CLIP/Qwen scores and ranks. Contextual bandits are an established approach for recommendation with partial feedback and changing candidate sets. [Contextual bandit research](https://www.microsoft.com/en-us/research/publication/a-contextual-bandit-approach-to-personalized-news-article-recommendation-3/) · [Exploration and propensity logging](https://vowpalwabbit.org/docs/vowpal_wabbit/python/latest/tutorials/python_Contextual_bandits_and_Vowpal_Wabbit.html)
-
-Enable the feedback loop by restarting the service with these arguments.
-
-```bash
-python -m kinetrace serve \
-    --index runs/sft-pilot-zxCXNv5N/train-index \
-    --videos runs/sft-pilot-zxCXNv5N/data/videos --current-sft \
-    --bandit-log runs/train-feedback.sqlite3 --epsilon 0.1
-```
-
-The demo adds a suggested video and explicit “Matches” / “Does not match” buttons. Initially the policy exploits Qwen's first choice with probability 0.9 and explores uniformly with probability 0.1. At five candidates, the first choice has probability 0.92 and each other candidate has probability 0.02. A decision records all candidate features, the selected action, its full probability distribution and model/index identity before returning the recommendation. Repeated identical feedback is idempotent. Conflicting feedback returns HTTP 409. Leave uncertain or audio-dependent examples unrated.
-
-Collect feedback on development queries drawn from training-side videos. The feedback command above uses that run's training index and extracted clips. The 1K-A index in the earlier service example is for service evaluation. Its judgments belong to test evaluation and should be kept in a separate database from training feedback.
-
-After collecting rated queries, fit and evaluate on CPU.
-
-```bash
-python -m kinetrace bandit-train \
-    --database runs/train-feedback.sqlite3 --out runs/bandit-v1.json
-```
-
-The command fits inverse-propensity-weighted ridge regression on the selected actions. Normalized queries are split deterministically into approximately 80% training and 20% evaluation, keeping repeated queries together. It reports baseline/candidate IPS, SNIPS, matched actions, effective sample size and the number of unrated decisions. A run needs rated queries in both splits. These estimates evaluate a frozen greedy policy on the logged candidate sets. Feedback coverage, support and sample size affect their interpretation. [Offline policy evaluation](https://vowpalwabbit.org/docs/vowpal_wabbit/python/latest/tutorials/off_policy_evaluation.html)
-
-Load a reviewed model with `--bandit-model runs/bandit-v1.json` together with `--bandit-log`. This enables epsilon-greedy exploration around its predicted reward scores. The rollout decision is explicit through the server command. The implementation is a small CPU baseline, with mathematical/API fixtures and no measured online uplift yet.
 
 ## Next milestones
 
 | Stage | Current status | Next acceptance evidence |
 | --- | --- | --- |
-| LoRA SFT | Training, adapter reload and paired evaluation completed | Retained adapter available through CLI and service |
-| Service and demo | API, bounded inference queue, fallback, playback and feedback implemented | School-server startup, actual visible memory and successful query/video playback |
-| Performance | Serial HTTP replay command implemented | Measured p50/p95, throughput, errors and memory, followed by concurrent load tests |
-| Contextual bandit | Exploration, durable feedback, reward-model fitting and offline evaluation implemented | Train-side feedback with sufficient action coverage, held-out evaluation and a controlled deployment comparison |
+| LoRA SFT | Training, adapter reload and paired evaluation completed | Reference checkpoint for candidate-policy comparisons |
+| Offline contextual bandit | Scoring driver, simulated rewards, policy fitting and paired evaluation implemented | Server results across the three fixed seeds |
 | Temporal evaluation | Planned | Verified temporal subset and original/reversed-frame comparison |
+| Final evaluation | Planned | Fixed settings and fresh held-out quality measurements |
 
-The project plan records the service-first sequence and the feedback evaluation protocol. [Project plan](KineTrace-Plan.md)
+The project plan describes the experiment sequence and reward limitations. [Project plan](KineTrace-Plan.md)
 
 ## Development workflow
 
@@ -192,7 +163,7 @@ python3 -m unittest discover -s tests -v
 python3 -m kinetrace --help
 ```
 
-Core checks use the standard library and work offline. HTTP service fixtures require the FastAPI/httpx dependencies in `requirements-service.txt`. The tests use stub retrieval/scoring and temporary files.
+Local checks use the standard library, temporary fixtures and stub model scoring. They exercise the experiment CLI, split checks, sampled rewards, policy fitting and paired evaluation.
 
 ## School server setup
 
@@ -296,9 +267,8 @@ The optional English rendering goes to CLIP. Qwen receives the original query. F
 | `kinetrace/reranker.py` | Ordered video input and binary relevance scoring |
 | `kinetrace/ranking.py` | Candidate-prefix reranking and Recall@K |
 | `kinetrace/sft.py` | Training-pair selection and LoRA updates |
-| `kinetrace/service.py` | Resident-model API, bounded admission, deadlines and media serving |
-| `kinetrace/bandit.py` | Exploration, SQLite feedback, reward fitting and off-policy evaluation |
-| `scripts/benchmark_service.py` | Serial HTTP replay and measured service reports |
+| `kinetrace/bandit.py` | Offline reward simulation, policy fitting and paired evaluation |
+| `scripts/compare_bandit.py` | Retained-LoRA scoring and the offline bandit experiment |
 | `kinetrace/review.py` | Portable, randomized A/B video review pages |
 | `kinetrace/__main__.py` | CLI entry points |
 | `scripts/baseline.sbatch` | Pilot and full first-stage runs |

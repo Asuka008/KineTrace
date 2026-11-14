@@ -1,7 +1,0 @@
-# Install in the school-server KineTrace environment for model-backed serving.
--r requirements-sft.txt
-# Keep the service and offline HTTP fixtures compatible with Python 3.9+.
-fastapi==0.121.3
-uvicorn==0.38.0
-pydantic==2.12.4
-httpx==0.28.1

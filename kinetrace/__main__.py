@@ -1,6 +1,5 @@
 import argparse
 import json
-import math
 from pathlib import Path
 
 from .data import check_videos, read_queries, read_run, write_run
@@ -16,13 +15,6 @@ def positive(value):
     return value
 
 
-def positive_seconds(value):
-    value = float(value)
-    if not math.isfinite(value) or value <= 0:
-        raise argparse.ArgumentTypeError("must be finite and positive")
-    return value
-
-
 def parser():
     cli = argparse.ArgumentParser(description="KineTrace video search")
     commands = cli.add_subparsers(dest="command", required=True)
@@ -31,19 +23,13 @@ def parser():
     search = commands.add_parser("search", help="search an existing index with free text")
     evaluate = commands.add_parser("retrieve", help="retrieve candidates for a labeled CSV")
     rerank = commands.add_parser("rerank", help="apply Qwen to a saved candidate prefix")
-    serve = commands.add_parser("serve", help="serve search and a browser demo with resident models")
-    serve.add_argument("--host", default="127.0.0.1")
-    serve.add_argument("--port", type=positive, default=8000)
-    serve.add_argument("--max-pending", type=positive, default=4,
-                       help="maximum admitted requests, including the active GPU request")
-    serve.add_argument("--timeout-s", type=positive_seconds, default=30.0,
-                       help="inference deadline including queue time")
-    serve.add_argument("--bandit-log", type=Path, help="enable exploratory recommendations and SQLite feedback logging")
-    serve.add_argument("--epsilon", type=float, default=0.1, help="exploration probability in (0, 1]")
-    serve.add_argument("--bandit-model", type=Path, help="reward model produced by bandit-train")
-    bandit = commands.add_parser("bandit-train", help="fit a CPU bandit reward model and evaluate held-out feedback")
-    bandit.add_argument("--database", type=Path, required=True)
+    bandit = commands.add_parser("bandit-compare", help="compare a simulated bandit with scored LoRA validation")
+    bandit.add_argument("--train", type=Path, required=True)
+    bandit.add_argument("--validation", type=Path, required=True)
     bandit.add_argument("--out", type=Path, required=True)
+    bandit.add_argument("--top-k", type=positive, default=5)
+    bandit.add_argument("--epsilon", type=float, default=0.1)
+    bandit.add_argument("--seeds", type=int, nargs="+", default=[42, 43, 44])
     depths = commands.add_parser("compare-depths", help="measure paired Top-5 and Top-10 reranking")
     train = commands.add_parser("train-lora", help="fit a yes/no Qwen adapter on train-side CLIP candidates")
     train.add_argument("--steps", type=positive, default=1, help="positive/negative pairs of updates (one optimizer step per pair)")
@@ -52,10 +38,9 @@ def parser():
                        help="use the highest-ranked eligible CLIP candidate or sample a training video uniformly")
     train.add_argument("--negative-yes-weight", default=0.0, type=float,
                        help="soft target mass on yes for a mined negative (0 <= weight < 0.5)")
-    for cmd in (rerank, serve):
-        adapters = cmd.add_mutually_exclusive_group()
-        adapters.add_argument("--adapter", type=Path, help="load a trained PEFT adapter on the selected Qwen base")
-        adapters.add_argument("--current-sft", action="store_true", help="use the retained school-server SFT pilot checkpoint")
+    adapters = rerank.add_mutually_exclusive_group()
+    adapters.add_argument("--adapter", type=Path, help="load a trained PEFT adapter on the selected Qwen base")
+    adapters.add_argument("--current-sft", action="store_true", help="use the retained school-server SFT pilot checkpoint")
     metrics = commands.add_parser("metrics", help="report text-to-video Recall@K")
     compare = commands.add_parser("compare-top1", help="show queries promoted to or displaced from first place")
     paired = commands.add_parser("compare-runs", help="compare first-place hits on identical labeled shortlists")
@@ -71,16 +56,16 @@ def parser():
         cmd.add_argument("--seed", type=int, default=42)
     review.add_argument("--exclude", nargs="+", default=[], metavar="QUERY_ID")
 
-    for cmd in (build, search, evaluate, rerank, depths, train, serve):
+    for cmd in (build, search, evaluate, rerank, depths, train):
         cmd.add_argument("--device", choices=("cuda", "cpu"), default="cuda")
-    for cmd in (build, search, evaluate, serve):
+    for cmd in (build, search, evaluate):
         cmd.add_argument("--index", type=Path, required=True)
     for cmd in (check, build, evaluate):
         cmd.add_argument("--csv", type=Path, required=True)
         cmd.add_argument("--limit", type=positive, help="read only the first N query rows")
-    for cmd in (check, build, rerank, review, changes, depths, train, serve):
+    for cmd in (check, build, rerank, review, changes, depths, train):
         cmd.add_argument("--videos", required=True, type=Path)
-    for cmd in (build, rerank, depths, train, serve):
+    for cmd in (build, rerank, depths, train):
         cmd.add_argument("--frames", type=positive, default=4)
     for cmd in (search, evaluate, rerank):
         cmd.add_argument("--top-k", type=positive, default=5 if cmd is rerank else 20)
@@ -93,20 +78,16 @@ def parser():
     search.add_argument("--retrieval-text", help="optional English rendering for the CLIP encoder")
     search.add_argument("--out", type=Path, help="save a single-query candidate run for reranking")
     evaluate.add_argument("--text-batch", default=8, type=positive)
-    for cmd in (rerank, depths, train, serve):
+    for cmd in (rerank, depths, train):
         cmd.add_argument("--qwen-model", default=QWEN_MODEL, help="HF model ID or local snapshot")
     return cli
 
 
 def run(args):
-    if args.command == "bandit-train":
-        from .bandit import train_from_feedback
+    if args.command == "bandit-compare":
+        from .bandit import compare_scored
 
-        return train_from_feedback(args)
-    if args.command == "serve":
-        from .service import run_server
-
-        return run_server(args)
+        return compare_scored(args)
     if args.command == "train-lora":
         from .sft import train_lora
 

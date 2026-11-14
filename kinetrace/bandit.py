@@ -1,14 +1,14 @@
-"""Epsilon-greedy video selection, logged propensities and offline policy evaluation."""
+"""Offline contextual-bandit simulation using labeled, frozen LoRA candidate scores."""
 import hashlib
 import json
 import math
 import random
-import sqlite3
-from contextlib import closing
+import statistics
+import tempfile
 from pathlib import Path
 
-from .data import output_file
-
+from .data import read_run, write_run
+from .ranking import compare_runs, summarize
 
 FEATURES = ["bias", "clip_score", "qwen_score", "inverse_clip_rank", "inverse_qwen_rank"]
 
@@ -21,87 +21,65 @@ def features(candidate, rank):
     return values
 
 
-def greedy_action(actions, model=None):
-    if model is None:
-        return 0  # The Qwen-sorted first result is the initial policy.
-    return max(range(len(actions)), key=lambda i: sum(
-        w * x for w, x in zip(model["weights"], actions[i]["features"])))
+def prediction(weights, values):
+    return sum(w * x for w, x in zip(weights, values))
 
 
-def load_model(path):
-    model = json.loads(Path(path).read_text())
-    if model.get("features") != FEATURES or model.get("version") != 1:
-        raise ValueError("Unsupported bandit model feature schema")
-    weights = model.get("weights", [])
-    if len(weights) != len(FEATURES) or not all(math.isfinite(w) for w in weights):
-        raise ValueError("Invalid bandit model weights")
-    return model
+def validate_rows(rows, depth, scored=True):
+    summarize(rows)  # Checks distinct nonempty candidates and fixed depth.
+    query_ids = set()
+    for row in rows:
+        if row["query_id"] in query_ids or not row["query"].strip():
+            raise ValueError("Expected unique query IDs and nonempty queries")
+        query_ids.add(row["query_id"])
+        candidates = row["candidates"]
+        ranks = [c["retrieval_rank"] for c in candidates]
+        if any(type(rank) is not int for rank in ranks) or sorted(ranks) != list(range(1, len(ranks) + 1)):
+            raise ValueError("Invalid retrieval ranks")
+        prefix = candidates[:depth]
+        if {c["retrieval_rank"] for c in prefix} != set(range(1, len(prefix) + 1)):
+            raise ValueError("Scored prefix must contain the original CLIP prefix")
+        if scored:
+            for rank, candidate in enumerate(prefix, 1):
+                features(candidate, rank)
+            scores = [float(c["rerank_score"]) for c in prefix]
+            if scores != sorted(scores, reverse=True):
+                raise ValueError("Expected candidates sorted by LoRA relevance")
 
 
-class FeedbackStore:
-    """Persist each decision before exposure and accept one idempotent binary reward."""
+def validate_splits(train, validation):
+    def gallery(rows):
+        return {r["target"] for r in rows} | {c["video_id"] for r in rows for c in r["candidates"]}
 
-    def __init__(self, path):
-        self.path = Path(path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        with closing(sqlite3.connect(self.path)) as db, db:
-            db.execute("PRAGMA journal_mode=WAL")
-            db.execute("""CREATE TABLE IF NOT EXISTS decisions (
-                event_id TEXT PRIMARY KEY, created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                payload TEXT NOT NULL, reward INTEGER CHECK (reward IN (0, 1)),
-                feedback_at TEXT)""")
-
-    def record(self, decision):
-        with closing(sqlite3.connect(self.path)) as db, db:
-            db.execute("INSERT INTO decisions(event_id, payload) VALUES (?, ?)",
-                       (decision["event_id"], json.dumps(decision, allow_nan=False)))
-
-    def feedback(self, event_id, reward):
-        if type(reward) is not int or reward not in (0, 1):
-            raise ValueError("Reward must be integer 0 or 1")
-        with closing(sqlite3.connect(self.path)) as db, db:
-            db.execute("BEGIN IMMEDIATE")
-            row = db.execute("SELECT reward FROM decisions WHERE event_id=?", (event_id,)).fetchone()
-            if row is None:
-                raise KeyError(event_id)
-            if row[0] is not None and row[0] != reward:
-                raise ValueError("Feedback already recorded with a different reward")
-            db.execute("""UPDATE decisions SET reward=?, feedback_at=CURRENT_TIMESTAMP
-                          WHERE event_id=? AND reward IS NULL""", (reward, event_id))
-
-    def snapshot(self):
-        with closing(sqlite3.connect(self.path)) as db:
-            rows = db.execute("SELECT payload, reward FROM decisions ORDER BY rowid").fetchall()
-        return [dict(json.loads(payload), reward=reward) for payload, reward in rows]
+    if gallery(train) & gallery(validation):
+        raise ValueError("Training and validation galleries overlap")
+    val_queries = {r["query"].strip().casefold() for r in validation}
+    eligible = [r for r in train if r["query"].strip().casefold() not in val_queries]
+    if not eligible:
+        raise ValueError("No training queries remain after excluding shared validation captions")
+    return eligible
 
 
-class BanditPolicy:
-    def __init__(self, database, epsilon=0.1, model_path=None):
-        if not 0 < epsilon <= 1:
-            raise ValueError("Exploration epsilon must be in (0, 1]")
-        self.store = FeedbackStore(database)
-        self.epsilon = epsilon
-        self.model = load_model(model_path) if model_path else None
-        self.version = (hashlib.sha256(Path(model_path).read_bytes()).hexdigest()
-                        if model_path else "qwen-top1-v1")
-        self.rng = random.SystemRandom()
-
-    def recommend(self, result, depth):
-        # Every eligible action has already been scored on the same query.
-        candidates = result["candidates"][:depth]
+def simulated_feedback(rows, depth, epsilon, seed):
+    if not math.isfinite(epsilon) or not 0 < epsilon <= 1:
+        raise ValueError("epsilon must be finite and in (0, 1]")
+    rng = random.Random(seed)
+    positives = {}
+    for row in rows:
+        positives.setdefault(row["query"].strip().casefold(), set()).add(row["target"])
+    decisions = []
+    for row in rows:
+        candidates = row["candidates"][:depth]
         actions = [{"video_id": c["video_id"], "features": features(c, rank)}
                    for rank, c in enumerate(candidates, 1)]
-        best = greedy_action(actions, self.model)
-        probabilities = [self.epsilon / len(actions)] * len(actions)
-        probabilities[best] += 1 - self.epsilon
-        chosen = self.rng.choices(range(len(actions)), weights=probabilities, k=1)[0]
-        decision = {"version": 1, "event_id": result["request_id"], "query": result["query"],
-                    "retrieval_text": result["retrieval_text"], "actions": actions,
-                    "chosen": chosen, "probabilities": probabilities, "policy": self.version,
-                    "epsilon": self.epsilon, "model": result["model"]}
-        self.store.record(decision)
-        return {"event_id": decision["event_id"], "candidate": candidates[chosen],
-                "probability": probabilities[chosen], "policy": self.version}
+        probabilities = [epsilon / len(actions)] * len(actions)
+        probabilities[0] += 1 - epsilon
+        chosen = rng.choices(range(len(actions)), weights=probabilities, k=1)[0]
+        known = positives[row["query"].strip().casefold()]
+        decisions.append({"query_id": row["query_id"], "actions": actions,
+                          "chosen": chosen, "probabilities": probabilities,
+                          "reward": int(actions[chosen]["video_id"] in known)})
+    return decisions
 
 
 def fit_reward_model(rows, regularization=1.0):
@@ -123,45 +101,58 @@ def fit_reward_model(rows, regularization=1.0):
             "weights": [sum(a * value for a, value in zip(line, b)) for line in inverse]}
 
 
-def evaluate(rows, model=None):
-    weights, weighted_rewards = [], []
+def apply_policy(rows, model, depth):
+    ranked = []
     for row in rows:
-        chosen = row["chosen"]
-        probability = row["probabilities"][chosen]
-        weight = float(greedy_action(row["actions"], model) == chosen) / probability
-        weights.append(weight)
-        weighted_rewards.append(weight * row["reward"])
-    total = sum(weights)
-    squared = sum(w * w for w in weights)
-    return {"events": len(rows), "matched_actions": sum(w > 0 for w in weights),
-            "ips": sum(weighted_rewards) / len(rows),
-            "snips": sum(weighted_rewards) / total if total else None,
-            "effective_sample_size": total * total / squared if squared else 0.0,
-            "max_importance_weight": max(weights)}
+        prefix = [dict(c, policy_score=prediction(model["weights"], features(c, rank)))
+                  for rank, c in enumerate(row["candidates"][:depth], 1)]
+        prefix.sort(key=lambda c: -c["policy_score"])
+        ranked.append(dict(row, candidates=prefix + row["candidates"][depth:]))
+    return ranked
 
 
-def train_from_feedback(args):
+def compare_scored(args):
     if args.out.exists():
-        raise FileExistsError(f"Choose a new model output: {args.out}")
-    if not args.database.is_file():
-        raise FileNotFoundError(args.database)
-    rows = FeedbackStore(args.database).snapshot()
-    labeled = [row for row in rows if row["reward"] is not None]
-    training, heldout = [], []
-    for row in labeled:
-        # Keep repeated normalized queries in one split, independently of reward/action.
-        key = row["query"].strip().casefold()
-        bucket = int(hashlib.sha256(key.encode()).hexdigest(), 16) % 5
-        (heldout if bucket == 0 else training).append(row)
-    if not training or not heldout:
-        raise ValueError("Need rated queries in both hash splits (80% training / 20% evaluation)")
-    model = fit_reward_model(training)
-    model["report"] = {"decisions": len(rows), "rated": len(labeled),
-                       "unrated": len(rows) - len(labeled), "train_events": len(training),
-                       "split": "sha256(normalized query) % 5 == 0 is evaluation",
-                       "baseline_policy": "qwen-top1-greedy",
-                       "evaluation_scope": "greedy policies on rated held-out decisions",
-                       "baseline": evaluate(heldout), "candidate": evaluate(heldout, model)}
-    with output_file(args.out) as stream:
-        json.dump(model, stream, indent=2, allow_nan=False)
-    return {"model": str(args.out), **model["report"]}
+        raise FileExistsError(f"Choose a new output directory: {args.out}")
+    if args.top_k < 1 or not args.seeds or len(set(args.seeds)) != len(args.seeds):
+        raise ValueError("Need positive depth and distinct seeds")
+    train, validation = [list(read_run(path)) for path in (args.train, args.validation)]
+    for rows in (train, validation):
+        validate_rows(rows, args.top_k)
+    eligible = validate_splits(train, validation)
+    baseline = summarize(validation)
+    report = {"experiment": "offline_bandit_simulation", "policy_training_device": "cpu",
+              "reward": "known training-caption target match; other candidates receive zero",
+              "validation_reward": "single annotated target match",
+              "epsilon": args.epsilon, "top_k": args.top_k, "seeds": args.seeds,
+              "train_queries": len(eligible), "excluded_shared_queries": len(train) - len(eligible),
+              "inputs": {str(path): hashlib.sha256(path.read_bytes()).hexdigest()
+                         for path in (args.train, args.validation)},
+              "lora": baseline, "runs": []}
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=args.out.parent) as temporary:
+        stage = Path(temporary) / "results"
+        stage.mkdir()
+        for seed in args.seeds:
+            decisions = simulated_feedback(eligible, args.top_k, args.epsilon, seed)
+            model = fit_reward_model(decisions)
+            model.update(seed=seed, epsilon=args.epsilon, top_k=args.top_k)
+            ranked = apply_policy(validation, model, args.top_k)
+            metrics = summarize(ranked)
+            paired = compare_runs(validation, ranked)
+            write_run(stage / f"feedback-{seed}.jsonl", decisions)
+            write_run(stage / f"validation-{seed}.jsonl", ranked)
+            (stage / f"policy-{seed}.json").write_text(json.dumps(model, indent=2, allow_nan=False))
+            weights = [1 / r["probabilities"][r["chosen"]] for r in decisions]
+            report["runs"].append({"seed": seed, "metrics": metrics, "paired": paired,
+                                   "r1_delta_pp": 100 * (metrics["R@1"] - baseline["R@1"]),
+                                   "sampled_positive_rewards": sum(r["reward"] for r in decisions),
+                                   "sampled_non_top1": sum(r["chosen"] != 0 for r in decisions),
+                                   "max_training_weight": max(weights),
+                                   "training_weight_ess": sum(weights)**2 / sum(w*w for w in weights)})
+        values = [r["metrics"]["R@1"] for r in report["runs"]]
+        report["r1_across_seeds"] = {"mean": statistics.mean(values), "std": statistics.pstdev(values),
+                                    "min": min(values), "max": max(values)}
+        (stage / "report.json").write_text(json.dumps(report, indent=2, allow_nan=False))
+        stage.rename(args.out)
+    return report
