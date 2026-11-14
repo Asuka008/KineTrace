@@ -9,7 +9,11 @@ Develop a reproducible video retrieval and reranking project through command-lin
 - The soft-negative control reaches 80/128 on validation. Review of three changed first choices found two ties and one audio-dependent case.
 - The retained adapter is `runs/sft-pilot-zxCXNv5N/adapter`. Detailed previous experiments are recorded in `EXPERIMENTS.md`.
 
-## Current experiment
+## Completed offline bandit pilot
+
+The server run `runs/sft-pilot-zxCXNv5N/bandit-offline-76ce4o18` completed on 2026-11-14. Four shared captions were excluded, leaving 252 training queries. Validation contains 128 queries and five candidates each. Seeds 42, 43 and 44 reach 82, 82 and 83 Top-1 hits, compared with 82 for retained LoRA and 77 for base Qwen. Mean policy R@1 is 64.32%, with seed standard deviation 0.37 percentage points, versus LoRA's 64.06%.
+
+The best seed gains two hits and loses one. All methods have R@5 of 82.03%. Training importance-weight effective sample size ranges from 29.43 to 34.78, and sampled non-top-one actions range from 18 to 24. The evidence supports completion of the pilot with a small, seed-dependent change. Retain LoRA as the comparison reference.
 
 Run `python -m scripts.compare_bandit runs/sft-pilot-zxCXNv5N` inside the server GPU allocation. The driver reads the retained checkpoint settings, scores the saved training candidates once and fits a small contextual-bandit policy on CPU. The five features are a bias, CLIP score, LoRA relevance score, reciprocal retrieval rank and reciprocal LoRA rank.
 
@@ -34,6 +38,6 @@ Each run gets a unique output directory, source revision, environment snapshot, 
 
 ## Subsequent work
 
-Review the three-seed policy results first. Then evaluate temporal order on verified original/reversed-frame pairs and measure offline scoring latency under fixed hardware, frame count and candidate depth. A broader RL experiment should follow an explicit reward specification and a result from this pilot that motivates added complexity.
+The three-seed policy pilot is complete. Next evaluate temporal order on verified original/reversed-frame pairs and measure offline scoring latency under fixed hardware, frame count and candidate depth. A broader RL experiment should follow an explicit reward specification and a result from this pilot that motivates added complexity.
 
-Commands and artifact names are maintained in the README. GPU scoring and policy quality are pending server execution. Local fixtures verify implementation behavior.
+Commands and artifact names are maintained in the README. GPU scoring and the three-seed development results are recorded from the server report. Local fixtures verify implementation behavior. Broader held-out policy quality and temporal-order behavior await measurement.

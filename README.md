@@ -28,7 +28,7 @@ The LoRA validation run uses 256 available training pairs, 256 optimizer updates
 | Evaluation | Report Recall@K, pair gains/losses by query ID, and export randomized A/B video reviews with judgment tallying |
 | Run artifacts | Save candidates, model settings, sampled training pairs, the last gradient norm and actual visible/peak allocated GPU memory in the server run directory |
 
-Current delivery includes command-line training, inference, paired evaluation and an offline contextual-bandit simulation. The simulation has small CPU fixture coverage. Its quality results await a school-server run.
+Current delivery includes command-line training, inference, paired evaluation and an offline contextual-bandit simulation. The simulation has small CPU fixture coverage and a completed three-seed school-server pilot, summarized below.
 
 ## Reproduce the LoRA experiment
 
@@ -98,9 +98,23 @@ python -m kinetrace review-changes --input "$RUN/retained-paired.json" \
 
 </details>
 
-## Next experiment — offline contextual bandit
+## Offline contextual bandit
 
-Run the next experiment from the school-server checkout inside a GPU allocation. Stop the previous foreground service with `Ctrl+C` before starting the experiment.
+The completed server run `runs/sft-pilot-zxCXNv5N/bandit-offline-76ce4o18` used 252 training queries after excluding four captions shared with validation. It evaluated the same 128 validation queries at candidate depth five.
+
+| Method | Top-1 hits | R@1 | Gains / losses against LoRA |
+| --- | ---: | ---: | ---: |
+| Base Qwen | 77/128 | 60.16% | — |
+| Retained LoRA | 82/128 | 64.06% | — |
+| Bandit seed 42 | 82/128 | 64.06% | 0 / 0 |
+| Bandit seed 43 | 82/128 | 64.06% | 0 / 0 |
+| Bandit seed 44 | 83/128 | 64.84% | 2 / 1 |
+
+Mean policy R@1 is 64.32%, a 0.26 percentage-point gain over LoRA, with a 0.37 percentage-point standard deviation across the three sampling seeds. Every method reaches R@5 of 82.03%. The best seed adds one net hit, while two seeds match LoRA's correctness outcomes. These results provide limited evidence for a repeatable quality gain. The retained LoRA remains the reference for subsequent experiments.
+
+The seeds sample 24, 18 and 18 non-top-one actions out of 252 queries. Their training importance-weight effective sample sizes are 34.78, 29.43 and 29.43, with a maximum weight of 50. These quantities describe training-weight concentration. The supplied console records an H200 NVL MIG 1g.18gb with 16.0 GiB visible to PyTorch. Scoring memory peaks were outside the supplied summary.
+
+To reproduce the pilot, run from the school-server checkout inside a GPU allocation.
 
 ```bash
 git pull --ff-only origin main
@@ -144,7 +158,7 @@ python -m kinetrace bandit-compare \
 | Stage | Current status | Next acceptance evidence |
 | --- | --- | --- |
 | LoRA SFT | Training, adapter reload and paired evaluation completed | Reference checkpoint for candidate-policy comparisons |
-| Offline contextual bandit | Scoring driver, simulated rewards, policy fitting and paired evaluation implemented | Server results across the three fixed seeds |
+| Offline contextual bandit | Three-seed pilot completed, mean R@1 64.32% versus LoRA 64.06% | Broader held-out evidence before adopting a policy |
 | Temporal evaluation | Planned | Verified temporal subset and original/reversed-frame comparison |
 | Final evaluation | Planned | Fixed settings and fresh held-out quality measurements |
 
