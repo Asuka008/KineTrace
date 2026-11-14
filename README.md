@@ -43,7 +43,9 @@ School-server run `runs/sft-pilot-zxCXNv5N/soft-negative-ot0fnqdz` completed 256
 | Retained hard-negative LoRA | 82/128 (64.0625%) | 105/128 (82.03125%) |
 | Soft-negative LoRA, 10% “yes” | 80/128 (62.5%) | 105/128 (82.03125%) |
 
-The soft candidate lost two net first-place hits, a decrease of 1.5625 percentage points. Three queries selected different first clips, and the generated review includes all three. Human judgments for this comparison are pending. Download `review.html` from that run directory, review the three pairs, export `review-judgments.json`, and upload it into the same run directory on the server. From the server checkout, tally the judgments on CPU with the following command.
+The soft candidate lost two net first-place hits, a decrease of 1.5625 percentage points. Three queries selected different first clips, and the generated review includes all three. The completed review tallied two `both` judgments (the clips were equally suitable), one `audio_required` judgment and zero unrated pairs. Neither adapter received a preference vote. The audio-dependent pair remains unresolved. These judgments cover all three disagreements in this validation run.
+
+The project retains the hard-negative SFT adapter after this comparison. The soft candidate's validation R@1 was lower, and the completed review provided no preference votes in its favor. Per-query review records are needed to relate each human judgment to the labeled-target losses. To reproduce the tally from the exported `review-judgments.json` in the run directory, use the following CPU command from the server checkout.
 
 ```bash
 COMPARISON=runs/sft-pilot-zxCXNv5N/soft-negative-ot0fnqdz
