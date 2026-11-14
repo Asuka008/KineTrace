@@ -1,5 +1,6 @@
 """Score a sampled video with the binary head of the Qwen3-VL reranker."""
 from pathlib import Path
+from copy import deepcopy
 
 from .video import read_clip
 
@@ -31,9 +32,13 @@ class QwenScorer:
         self.answer_ids = [vocab["no"], vocab["yes"]]
 
     def next_token_logits(self, query, video_id):
+        frames, metadata = read_clip(self.video_dir / f"{video_id}.mp4", self.frames)
+        return self.frame_logits(query, frames, metadata)
+
+    def frame_logits(self, query, frames, metadata):
+        """Use pre-decoded frames while keeping the existing prompt and model path."""
         import numpy as np
 
-        frames, metadata = read_clip(self.video_dir / f"{video_id}.mp4", self.frames)
         messages = [
             {"role": "system", "content": [{"type": "text", "text":
                 "Judge whether the Document satisfies the Query and Instruct. Answer yes or no."}]},
@@ -46,13 +51,18 @@ class QwenScorer:
         ]
         prompt = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         inputs = self.processor(
-            text=[prompt], videos=[np.stack(frames)], video_metadata=[metadata],
+            text=[prompt], videos=[np.stack(frames)], video_metadata=[deepcopy(metadata)],
             do_sample_frames=False, return_tensors="pt"
         ).to(self.device)
         if "pixel_values_videos" not in inputs:
-            raise ValueError(f"Missing visual input for {video_id}")
+            raise ValueError("Missing visual input for sampled video")
         outputs = self.model(**inputs, logits_to_keep=1, use_cache=False)
         return outputs.logits[0, -1].float()
+
+    def score_frames(self, query, frames, metadata):
+        with self.torch.inference_mode():
+            logits = self.frame_logits(query, frames, metadata)[self.answer_ids]
+            return logits.softmax(dim=0)[1].item()
 
     def __call__(self, query, video_id):
         with self.torch.inference_mode():

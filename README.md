@@ -28,7 +28,7 @@ The LoRA validation run uses 256 available training pairs, 256 optimizer updates
 | Evaluation | Report Recall@K, pair gains/losses by query ID, and export randomized A/B video reviews with judgment tallying |
 | Run artifacts | Save candidates, model settings, sampled training pairs, the last gradient norm and actual visible/peak allocated GPU memory in the server run directory |
 
-Current delivery includes command-line training, inference, paired evaluation and an offline contextual-bandit simulation. The simulation has small CPU fixture coverage and a completed three-seed school-server pilot, summarized below.
+Current delivery includes command-line training, inference, paired evaluation, a base-Qwen frame-order diagnostic and an offline contextual-bandit simulation. The simulation has small CPU fixture coverage and a completed three-seed school-server pilot, summarized below.
 
 ## Reproduce the LoRA experiment
 
@@ -98,6 +98,42 @@ python -m kinetrace review-changes --input "$RUN/retained-paired.json" \
 
 </details>
 
+## Next experiment — base-Qwen frame-order sensitivity
+
+Run this command inside the school-server GPU allocation using the existing environment.
+
+```bash
+git pull --ff-only origin main
+conda activate "$HOME/conda-envs/kinetrace"
+python -m scripts.compare_temporal runs/sft-pilot-zxCXNv5N
+```
+
+The driver uses the pilot's validation candidates and base-Qwen model path, device and frame-count settings. It loads the base Qwen model and scores both frame orders in one process. Each query/candidate pair is decoded once. The same sampled images are presented chronologically and in reverse, using fixed increasing timestamp slots. Qwen constructs timestamp text from video metadata, so the processor receives a fresh metadata copy for each call. [Pinned processor implementation](https://github.com/huggingface/transformers/blob/v4.57.3/src/transformers/models/qwen3_vl/processing_qwen3_vl.py)
+
+The diagnostic measures score sensitivity and ranking changes. The existing captions cover general video retrieval. Temporal-understanding accuracy requires a separately verified set of order-dependent descriptions and labels for both presentations. The reverse run's `reverse_reference_labels` metrics use the original video's labels as a reference. A change can reflect temporal sensitivity, visual artifacts or other effects of reversal.
+
+The command prints the output directory `runs/sft-pilot-zxCXNv5N/temporal-base-*` and a compact summary. The run records GPU memory visible to PyTorch before loading, measured scoring memory peaks, source/input hashes and the environment. It also compares fresh forward rankings with the cached base-Qwen run.
+
+| Artifact | Contents |
+| --- | --- |
+| `summary.json` | Forward Recall, reversed-reference Recall, Top-1 changes, score deltas, timing, memory and cached-baseline comparison |
+| `comparison/forward.jsonl`, `comparison/reverse.jsonl` | Both rankings over identical candidate sets, including the original tail |
+| `comparison/score-pairs.jsonl` | Per-query/video scores, sampled timestamp slots and reversed source-frame indices |
+| `commit.txt`, `environment.txt`, `provenance.json` | Source revision, dependencies and input provenance |
+
+Warm-up covers one candidate in both orders. The first-scored order alternates across queries and candidates. Reported scoring p50/p95 covers preprocessing and synchronized model inference over the scored prefix. Shared decoding is timed separately, and model loading occurs before timing. The score comparison uses absolute tie tolerance `1e-6`. Targets outside the scored prefix are counted explicitly. These measurements use small offline CPU fixtures locally; model-backed results await the server run.
+
+For a separate raw retrieval run, use the general CLI with explicit paths.
+
+```bash
+python -m kinetrace compare-order \
+    --input runs/sft-pilot-zxCXNv5N/val.jsonl \
+    --videos runs/sft-pilot-zxCXNv5N/data/videos \
+    --qwen-model "$HOME/models/Qwen3-VL-Reranker-2B-9887917" \
+    --device cuda --frames 4 --top-k 5 \
+    --out runs/frame-order-comparison
+```
+
 ## Offline contextual bandit
 
 The completed server run `runs/sft-pilot-zxCXNv5N/bandit-offline-76ce4o18` used 252 training queries after excluding four captions shared with validation. It evaluated the same 128 validation queries at candidate depth five.
@@ -159,7 +195,8 @@ python -m kinetrace bandit-compare \
 | --- | --- | --- |
 | LoRA SFT | Training, adapter reload and paired evaluation completed | Reference checkpoint for candidate-policy comparisons |
 | Offline contextual bandit | Three-seed pilot completed, mean R@1 64.32% versus LoRA 64.06% | Broader held-out evidence before adopting a policy |
-| Temporal evaluation | Planned | Verified temporal subset and original/reversed-frame comparison |
+| Frame-order sensitivity | Base-Qwen paired-frame CLI implemented | Server score/ranking changes and measured resource use |
+| Temporal understanding | Planned | Verified order-dependent captions and labels for original/reversed presentations |
 | Final evaluation | Planned | Fixed settings and fresh held-out quality measurements |
 
 The project plan describes the experiment sequence and reward limitations. [Project plan](KineTrace-Plan.md)
@@ -281,6 +318,8 @@ The optional English rendering goes to CLIP. Qwen receives the original query. F
 | `kinetrace/reranker.py` | Ordered video input and binary relevance scoring |
 | `kinetrace/ranking.py` | Candidate-prefix reranking and Recall@K |
 | `kinetrace/sft.py` | Training-pair selection and LoRA updates |
+| `kinetrace/temporal.py` | Paired frame-order sensitivity, score traces and timing |
+| `scripts/compare_temporal.py` | Base-Qwen frame-order experiment on the pilot validation split |
 | `kinetrace/bandit.py` | Offline reward simulation, policy fitting and paired evaluation |
 | `scripts/compare_bandit.py` | Retained-LoRA scoring and the offline bandit experiment |
 | `kinetrace/review.py` | Portable, randomized A/B video review pages |

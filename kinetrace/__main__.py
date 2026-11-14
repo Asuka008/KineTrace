@@ -31,6 +31,7 @@ def parser():
     bandit.add_argument("--epsilon", type=float, default=0.1)
     bandit.add_argument("--seeds", type=int, nargs="+", default=[42, 43, 44])
     depths = commands.add_parser("compare-depths", help="measure paired Top-5 and Top-10 reranking")
+    order = commands.add_parser("compare-order", help="measure base Qwen sensitivity to reversed sampled frames")
     train = commands.add_parser("train-lora", help="fit a yes/no Qwen adapter on train-side CLIP candidates")
     train.add_argument("--steps", type=positive, default=1, help="positive/negative pairs of updates (one optimizer step per pair)")
     train.add_argument("--seed", type=int, default=42)
@@ -56,34 +57,38 @@ def parser():
         cmd.add_argument("--seed", type=int, default=42)
     review.add_argument("--exclude", nargs="+", default=[], metavar="QUERY_ID")
 
-    for cmd in (build, search, evaluate, rerank, depths, train):
+    for cmd in (build, search, evaluate, rerank, depths, train, order):
         cmd.add_argument("--device", choices=("cuda", "cpu"), default="cuda")
     for cmd in (build, search, evaluate):
         cmd.add_argument("--index", type=Path, required=True)
     for cmd in (check, build, evaluate):
         cmd.add_argument("--csv", type=Path, required=True)
         cmd.add_argument("--limit", type=positive, help="read only the first N query rows")
-    for cmd in (check, build, rerank, review, changes, depths, train):
+    for cmd in (check, build, rerank, review, changes, depths, train, order):
         cmd.add_argument("--videos", required=True, type=Path)
-    for cmd in (build, rerank, depths, train):
+    for cmd in (build, rerank, depths, train, order):
         cmd.add_argument("--frames", type=positive, default=4)
-    for cmd in (search, evaluate, rerank):
-        cmd.add_argument("--top-k", type=positive, default=5 if cmd is rerank else 20)
-    for cmd in (evaluate, rerank, ranks, review, changes, depths, train):
+    for cmd in (search, evaluate, rerank, order):
+        cmd.add_argument("--top-k", type=positive, default=5 if cmd in (rerank, order) else 20)
+    for cmd in (evaluate, rerank, ranks, review, changes, depths, train, order):
         cmd.add_argument("--out", required=True, type=Path)
-    for cmd in (rerank, metrics, ranks, compare, review, changes, depths, train):
+    for cmd in (rerank, metrics, ranks, compare, review, changes, depths, train, order):
         cmd.add_argument("--input", required=True, type=Path)
     build.add_argument("--clip-model", default=CLIP_MODEL, help="HF model ID or local snapshot")
     search.add_argument("--query", required=True)
     search.add_argument("--retrieval-text", help="optional English rendering for the CLIP encoder")
     search.add_argument("--out", type=Path, help="save a single-query candidate run for reranking")
     evaluate.add_argument("--text-batch", default=8, type=positive)
-    for cmd in (rerank, depths, train):
+    for cmd in (rerank, depths, train, order):
         cmd.add_argument("--qwen-model", default=QWEN_MODEL, help="HF model ID or local snapshot")
     return cli
 
 
 def run(args):
+    if args.command == "compare-order":
+        from .temporal import compare_order
+
+        return compare_order(args)
     if args.command == "bandit-compare":
         from .bandit import compare_scored
 

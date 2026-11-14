@@ -36,8 +36,16 @@ Develop on the Mac using small offline CPU fixtures. The user runs model scoring
 
 Each run gets a unique output directory, source revision, environment snapshot, input/adapter hashes, simulated feedback, learned policies, validation rankings and JSON reports. The CPU comparison publishes its directory atomically and rejects an existing output path. Completed training scores can be reused with `bandit-compare` if the later comparison needs rerunning. Videos, models and outputs remain outside Git.
 
+## Current step — base-Qwen frame-order diagnostic
+
+Run `python -m scripts.compare_temporal runs/sft-pilot-zxCXNv5N` on the server GPU allocation. Use the base Qwen model with the pilot's 128 validation queries and saved CLIP candidates. Decode each candidate once and score chronological and reversed sampled frames using fixed increasing timestamp slots. Alternate which order runs first. The implementation reuses the reranker's prompt, preprocessing and scoring path.
+
+Report forward Recall, reference-label Recall under reversal, all Top-1 changes, candidate/target score deltas and explicit counts of targets outside the scored prefix. Record per-query shared decoding time and scoring p50/p95, actual visible GPU memory and post-warm-up memory peaks. Compare fresh forward predictions with the cached base-Qwen baseline. Save score pairs and source-frame indices for inspection.
+
+This first step measures sensitivity to input frame order. Correct temporal reasoning requires verified order-dependent queries and labels for both original and reversed presentations. General retrieval captions can remain valid under reversal or become invalid, so the reference-label metrics support a diagnostic interpretation. The next dataset work should establish which queries require ordering and whether the sampled frames preserve the relevant events.
+
+Local CPU fixtures cover frame reversal, metadata isolation, alternating execution, stable ties, candidate misses and result publication. GPU measurements are pending the server run. The driver and README provide the same command-line entry points.
+
 ## Subsequent work
 
-The three-seed policy pilot is complete. Next evaluate temporal order on verified original/reversed-frame pairs and measure offline scoring latency under fixed hardware, frame count and candidate depth. A broader RL experiment should follow an explicit reward specification and a result from this pilot that motivates added complexity.
-
-Commands and artifact names are maintained in the README. GPU scoring and the three-seed development results are recorded from the server report. Local fixtures verify implementation behavior. Broader held-out policy quality and temporal-order behavior await measurement.
+Review the base-Qwen sensitivity traces, then construct the verified temporal subset and assess correctness on it. The completed LoRA and bandit experiments supply earlier development results. A broader RL experiment should follow an explicit reward specification and evidence that motivates added complexity.
