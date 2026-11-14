@@ -32,9 +32,26 @@ python -m scripts.compare_soft_sft runs/sft-pilot-zxCXNv5N
 
 The experiment trains a fresh adapter on the original pairs, using 90% “no” and 10% “yes” target mass for each weakly labeled negative. Positives retain the “yes” target. This is an experimental loss weight. The driver reuses the reference base, seed, steps, frames and validation candidates. Before training, it checks that training and validation video IDs are disjoint and the eligible pair count matches the reference. When the reference has a saved `training-pairs.jsonl`, it also checks every pair in order. Older pilots support the pair-count check.
 
-The candidate is saved in a new `soft-negative-*` subdirectory of the supplied pilot. Its `commit.txt` records the source version, and `adapter/train-report.json` records the target weight, GPU model, memory visible to PyTorch and peak allocated training memory. The reference pilot used 256 updates and four frames on a slice with 16.0 GiB visible. Check the new allocation's recorded memory when assessing the run. The soft-target training and validation results await a school-server run.
+The candidate is saved in a new `soft-negative-*` subdirectory of the supplied pilot. Its `commit.txt` records the source version, and `adapter/train-report.json` records the target weight, GPU model, memory visible to PyTorch and peak allocated training memory. The reference pilot used 256 updates and four frames on a slice with 16.0 GiB visible. Check the new allocation's recorded memory when assessing the run.
 
 The console prints the validation recalls and the number of queries with different first choices. Download `review.html` from the new directory when the first choices differ. The page samples up to 20 such queries uniformly regardless of the benchmark label. Rate which clip better satisfies the description and export the judgments. Upload that JSON to the server and tally it with `python -m scripts.compare_soft_sft COMPARISON_DIRECTORY --judgments EXPORTED_JSON`. Ties, missing evidence and unrated pairs are counted separately. Keep the retained SFT as the project choice while assessing the candidate.
+
+School-server run `runs/sft-pilot-zxCXNv5N/soft-negative-ot0fnqdz` completed 256 updates on 256 available pairs with seed 42, four frames and a negative “yes” weight of 0.1. The H200 NVL MIG 1g.18gb exposed 16.0 GiB to PyTorch. Peak allocated training memory was 4.1036 GiB for 1,605,632 trainable parameters. The final pair loss was 0.360574 and the final pre-clipping gradient norm was 3.9183.
+
+| Adapter | Validation R@1 | Validation R@5 |
+| --- | ---: | ---: |
+| Retained hard-negative LoRA | 82/128 (64.0625%) | 105/128 (82.03125%) |
+| Soft-negative LoRA, 10% “yes” | 80/128 (62.5%) | 105/128 (82.03125%) |
+
+The soft candidate lost two net first-place hits, a decrease of 1.5625 percentage points. Three queries selected different first clips, and the generated review includes all three. Human judgments for this comparison are pending. Download `review.html` from that run directory, review the three pairs, export `review-judgments.json`, and upload it into the same run directory on the server. From the server checkout, tally the judgments on CPU with the following command.
+
+```bash
+COMPARISON=runs/sft-pilot-zxCXNv5N/soft-negative-ot0fnqdz
+python -m scripts.compare_soft_sft "$COMPARISON" \
+    --judgments "$COMPARISON/review-judgments.json"
+```
+
+In the tally, `current` means the retained hard-negative adapter and `candidate` means the soft-negative adapter. The review covers the three queries whose first choices differ.
 
 **School-server pilot.** Run `pilot32-20261112-204808` used the first 32 JSFusion queries and their 32 videos, with four frames per video and 20 saved candidates. PyTorch reported 16.00 GiB visible on an NVIDIA H200 NVL MIG 1g.18gb. The server's Git ownership check prevented capture of the run's commit hash.
 
