@@ -1,53 +1,85 @@
 # KineTrace
-**Temporal Video Search and Reranking**
+**Video Retrieval · Vision-Language Reranking · LoRA Fine-Tuning**
 
-Find a short clip from a description such as “a red car skids on a wet road, then recovers.” A first-stage retriever narrows the corpus. A second-stage vision-language model scores the ordered frames of each shortlisted clip against the original query.
+Search short videos from a natural-language description. KineTrace retrieves candidates with frozen CLIP and FAISS, then reranks sampled video frames with Qwen3-VL-Reranker-2B and an optional LoRA adapter. The repository includes training, adapter inference, paired evaluation and portable video review tools.
 
-The experiment summary consolidates measured results, human reviews and remaining validation gaps. [实验结论汇总](EXPERIMENTS.md)
+## Measured results
 
-| Stage | Initial implementation |
+| Measurement | Result | Evaluation scope |
+| --- | --- | --- |
+| LoRA validation R@1 | **60.16% → 64.06% (+3.91 percentage points)** | Base Qwen 77/128 → hard-negative LoRA 82/128, on the same 128-query validation split and CLIP Top-5 candidates |
+| Trainable LoRA parameters | **1,605,632** | Language attention Q/V adapters, rank 8, alpha 16, with the count recorded in the training pilot and soft-target control |
+| Hard-negative LoRA training peak | **4.104 GiB allocated** | 256 updates, four frames per clip, H200 NVL MIG with 16.0 GiB visible to PyTorch |
+| Retrieval + base reranker R@1 | **28.9% → 38.0% (+9.1 percentage points)** | Frozen CLIP → base Qwen Top-5, MSR-VTT JSFusion 1K-A, 1,000 queries and 1,000 videos |
+
+The LoRA validation run uses 256 available training pairs, 256 optimizer updates and seed 42. It gains seven first-place hits and loses two relative to the base model. Training and validation videos are disjoint, and the same held-out shortlist is used for both models.
+
+**Generalization result.** On JSFusion 1K-A, the retained LoRA reaches 36.5% R@1 versus 38.0% for base Qwen at Top-5. The validation gain therefore remains specific to the reported development split. Full results, negative-sampling controls and human reviews are available in the experiment summary. [实验结论汇总](EXPERIMENTS.md)
+
+## Implemented pipeline
+
+| Component | Implementation |
 | --- | --- |
-| Offline indexing | Sample frames across each MP4, encode them with frozen CLIP ViT-B/32, normalize, mean-pool and normalize again. Persist a FAISS CPU IndexFlatIP and an ordered video-ID manifest. |
-| Retrieval | Encode a free-text query or a batch of captions, then return cosine scores and original ranks. |
-| Reranking | Qwen3-VL-Reranker-2B scores one candidate at a time from chronological frames. Keep the first-stage scores, ranks and unscored tail for comparison. |
-| Evaluation | Read an MSR-VTT JSFusion-style CSV. Save candidate JSONL and text-to-video Recall@1/5/10 plus recall at the saved depth. Metrics use fractions. |
-| Current SFT | Four-frame Top-5 Qwen with the retained hard-negative LoRA. Select it with `rerank --current-sft` on the school server. |
+| Video indexing | Sample chronological frames, encode with frozen CLIP ViT-B/32, normalize and mean-pool, then persist a FAISS CPU IndexFlatIP and ordered video manifest |
+| Retrieval | Encode free-text queries or caption batches, preserve cosine scores and original ranks |
+| Train-side data | Split by video ID, exclude test IDs, mine CLIP negatives while excluding known positives for each normalized caption |
+| LoRA SFT | Freeze the base model, train language attention Q/V adapters with gradient checkpointing and separate positive/negative forwards accumulated into one optimizer step |
+| Adapter inference | Save the adapter, reload it in a separate process and score the same candidate prefix with four-frame video input |
+| Evaluation | Report Recall@K, pair gains/losses by query ID, and export randomized A/B video reviews with judgment tallying |
+| Run artifacts | Save candidates, model settings, sampled training pairs, the last gradient norm and actual visible/peak allocated GPU memory in the server run directory |
 
-The retained checkpoint is `runs/sft-pilot-zxCXNv5N/adapter`, the SFT version used in the human review. On JSFusion 1K-A the base, retained and random-negative models hit 380, 365 and 374 first places respectively. Human review found individually preferred clips and plausible alternate matches. Overall human preference across all queries is still unmeasured. For an existing candidate run, select the retained checkpoint explicitly from the repository root:
+Current delivery is a Python CLI with school-server training and evaluation runs. The LoRA training and evaluation milestone is complete. The next milestone is a query service with a playable comparison demo and measured request performance.
 
-```bash
-RUN=runs/jsfusion1k-20261112-212351
-python -m kinetrace rerank --current-sft --input "$RUN/retrieval.jsonl" \
-    --videos "$HOME/datasets/MSRVTT/videos" --out "$RUN/retained-sft.jsonl"
-```
+## Reproduce the LoRA experiment
 
-### Test a softer target for mined negatives
-
-From the school-server checkout in a GPU allocation, run:
+From the school-server checkout inside a GPU allocation, activate the project environment and install the training dependencies. Initial environment and dataset setup are described below.
 
 ```bash
 git pull --ff-only origin main
 conda activate "$HOME/conda-envs/kinetrace"
 python -m pip install -r requirements-sft.txt
+SFT_TRAIN_VIDEOS=256 SFT_VAL_VIDEOS=128 SFT_STEPS=256 bash scripts/sft_pilot.sh
+```
+
+The driver expects `MSRVTT_Videos.zip` and `MSRVTT_JSFUSION_test.csv` under `MSRVTT_ROOT` (default `~/datasets/MSRVTT`). It downloads train_9k captions once, builds separate train/validation indexes, mines negatives, trains and reloads the adapter, and evaluates both models on the same validation candidates. Set `RUN_ROOT` for the output parent and `QWEN_DIR` for the local Qwen snapshot. The default snapshot path is `~/models/Qwen3-VL-Reranker-2B-9887917`.
+
+The training objective supervises the next answer token, “yes” for the labeled video and “no” for a mined negative. AdamW uses learning rate `1e-4`. Each update averages the positive and negative losses. Only the language attention Q/V LoRA parameters train. The GPU smoke configuration defaults to one update when `SFT_STEPS` is omitted.
+
+Inspect these artifacts in the printed run directory.
+
+| Artifact | Contents |
+| --- | --- |
+| `commit.txt`, `environment.txt` | Source revision and installed dependencies |
+| `adapter/train-report.json` | Training settings, trainable parameter count, last loss/gradient norm, visible GPU memory and peak allocated training memory |
+| `adapter/training-pairs.jsonl` | Positive/negative pairs before the training-order shuffle, saved by the current training code |
+| `metrics-base.json`, `metrics-adapted.json` | Paired validation Recall |
+| `paired.json` | Query-level gains and losses after adapter reload |
+
+The retained school-server checkpoint is `runs/sft-pilot-zxCXNv5N/adapter`. From that checkout, apply it to an existing retrieval run with the following commands.
+
+```bash
+RUN=runs/jsfusion1k-20261112-212351
+python -m kinetrace rerank --current-sft --input "$RUN/retrieval.jsonl" \
+    --videos "$HOME/datasets/MSRVTT/videos" --top-k 5 --frames 4 \
+    --out "$RUN/retained-sft.jsonl"
+python -m kinetrace metrics --input "$RUN/retained-sft.jsonl"
+python -m kinetrace compare-runs --baseline "$RUN/reranked-k5.jsonl" \
+    --input "$RUN/retained-sft.jsonl" > "$RUN/retained-paired.json"
+```
+
+For a newly trained checkpoint, use `--adapter PATH_TO_ADAPTER --qwen-model PATH_TO_BASE` in place of `--current-sft`. The retained shortcut reads its base snapshot from the saved training report.
+
+<details>
+<summary>Additional experiment and review commands</summary>
+
+Run the training controls inside the school GPU allocation.
+
+```bash
+python -m scripts.compare_sft_negatives runs/sft-pilot-zxCXNv5N
 python -m scripts.compare_soft_sft runs/sft-pilot-zxCXNv5N
 ```
 
-The experiment trains a fresh adapter on the original pairs, using 90% “no” and 10% “yes” target mass for each weakly labeled negative. Positives retain the “yes” target. This is an experimental loss weight. The driver reuses the reference base, seed, steps, frames and validation candidates. Before training, it checks that training and validation video IDs are disjoint and the eligible pair count matches the reference. When the reference has a saved `training-pairs.jsonl`, it also checks every pair in order. Older pilots support the pair-count check.
-
-The candidate is saved in a new `soft-negative-*` subdirectory of the supplied pilot. Its `commit.txt` records the source version, and `adapter/train-report.json` records the target weight, GPU model, memory visible to PyTorch and peak allocated training memory. The reference pilot used 256 updates and four frames on a slice with 16.0 GiB visible. Check the new allocation's recorded memory when assessing the run.
-
-The console prints the validation recalls and the number of queries with different first choices. Download `review.html` from the new directory when the first choices differ. The page samples up to 20 such queries uniformly regardless of the benchmark label. Rate which clip better satisfies the description and export the judgments. Upload that JSON to the server and tally it with `python -m scripts.compare_soft_sft COMPARISON_DIRECTORY --judgments EXPORTED_JSON`. Ties, missing evidence and unrated pairs are counted separately. Keep the retained SFT as the project choice while assessing the candidate.
-
-School-server run `runs/sft-pilot-zxCXNv5N/soft-negative-ot0fnqdz` completed 256 updates on 256 available pairs with seed 42, four frames and a negative “yes” weight of 0.1. The H200 NVL MIG 1g.18gb exposed 16.0 GiB to PyTorch. Peak allocated training memory was 4.1036 GiB for 1,605,632 trainable parameters. The final pair loss was 0.360574 and the final pre-clipping gradient norm was 3.9183.
-
-| Adapter | Validation R@1 | Validation R@5 |
-| --- | ---: | ---: |
-| Retained hard-negative LoRA | 82/128 (64.0625%) | 105/128 (82.03125%) |
-| Soft-negative LoRA, 10% “yes” | 80/128 (62.5%) | 105/128 (82.03125%) |
-
-The soft candidate lost two net first-place hits, a decrease of 1.5625 percentage points. Three queries selected different first clips, and the generated review includes all three. The completed review tallied two `both` judgments (the clips were equally suitable), one `audio_required` judgment and zero unrated pairs. Neither adapter received a preference vote. The audio-dependent pair remains unresolved. These judgments cover all three disagreements in this validation run.
-
-The project retains the hard-negative SFT adapter after this comparison. The soft candidate's validation R@1 was lower, and the completed review provided no preference votes in its favor. Per-query review records are needed to relate each human judgment to the labeled-target losses. To reproduce the tally from the exported `review-judgments.json` in the run directory, use the following CPU command from the server checkout.
+The soft-target control uses 90% “no” and 10% “yes” target mass on negatives and produces a blind review of different first choices. Upload the browser-exported judgments into its comparison directory and tally on CPU.
 
 ```bash
 COMPARISON=runs/sft-pilot-zxCXNv5N/soft-negative-ot0fnqdz
@@ -55,151 +87,39 @@ python -m scripts.compare_soft_sft "$COMPARISON" \
     --judgments "$COMPARISON/review-judgments.json"
 ```
 
-In the tally, `current` means the retained hard-negative adapter and `candidate` means the soft-negative adapter. The review covers the three queries whose first choices differ.
-
-**School-server pilot.** Run `pilot32-20261112-204808` used the first 32 JSFusion queries and their 32 videos, with four frames per video and 20 saved candidates. PyTorch reported 16.00 GiB visible on an NVIDIA H200 NVL MIG 1g.18gb. The server's Git ownership check prevented capture of the run's commit hash.
-
-| Metric | Frozen CLIP | Qwen rerank (top 5) |
-| --- | ---: | ---: |
-| R@1 | 24/32 (75%) | 26/32 (81.25%) |
-| R@5 | 29/32 | 29/32 |
-| R@10 | 31/32 | 31/32 |
-| R@20 | 31/32 | 31/32 |
-
-Qwen revision `9887917` scored four frames per candidate. It promoted two targets to first place and displaced none.
-
-**Full MSR-VTT JSFusion 1K-A baseline.** School-server run `jsfusion1k-20261112-212351` indexed 1,000 videos with four frames each and retrieved 20 candidates per query.
-
-| Metric | Frozen CLIP | CLIP + Qwen (top 5, four frames) |
-| --- | ---: | ---: |
-| R@1 | 28.9% | 38.0% |
-| R@5 | 52.6% | 52.6% |
-| R@10 | 60.6% | 60.6% |
-| R@20 | 70.2% | 70.2% |
-
-Qwen promoted 136 of the 237 targets originally ranked 2–5 and displaced 45 of the 289 targets originally ranked first. It retained 244 first-place hits and finished with 380/1,000, a net gain of 91. Of the 526 queries whose targets were in the shortlist, 146 still ranked their targets below first place after reranking. End-to-end search latency and peak inference memory await measurement.
-
-To inspect the individual gains and losses, read the original CLIP ranks preserved in the reranked file. This comparison runs on CPU:
-
-```bash
-RUN=runs/pilot32-20261112-204808
-python -m kinetrace compare-top1 --input "$RUN/reranked-k5.jsonl"
-```
-
-On human inspection of q11, the reviewer judged both clips plausible. Qwen's top clip (`video7212`) shows a person walking, singing and walking a dog. The query specifies standing in the road. The labeled target (`video7028`) moved from first to fourth, counting as one benchmark loss.
-
-For a reproducible review of five more losses, run this command in the server terminal:
+For a saved `compare-runs` report, generate a portable review of gains and losses.
 
 ```bash
 RUN=runs/jsfusion1k-20261112-212351
-python -m kinetrace review-lost --input "$RUN/compare-k5.json" --videos "$HOME/datasets/MSRVTT/videos" \
-    --exclude q11 --seed 42 --limit 5 --out "$RUN/review-lost.html"
+python -m kinetrace review-changes --input "$RUN/retained-paired.json" \
+    --videos "$HOME/datasets/MSRVTT/videos" --seed 42 --per-outcome 10 \
+    --out "$RUN/retained-review.html"
 ```
 
-Download the HTML from JupyterLab and open it in a browser. It embeds both clips, randomizes their left/right order and hides their model identities until you expand the ranking. Rate each pair, then download the JSON judgments before closing. The benchmark metrics use the original annotations.
+</details>
 
-Choose `audio_required` when the available visuals leave a decisive spoken or acoustic detail unresolved. For q34, walking is visible, but the subject of the conversation (“their culture”) can require speech or captions. A visible mismatch can still rule out a clip. The current reranker receives sampled frames and query text.
+## Next milestones
 
-The five-case review marked only the labeled target as relevant for q231, q122 and q394, and both clips for q443 and q901. The saved judgment for q901 is `both`; its spoken topic remains unverified from silent playback.
+These are planned extensions. The current CLI supplies the retrieval, scoring and evaluation components.
 
-### Compare reranking depths on the same shortlist
+| Priority | Deliverable | Acceptance evidence |
+| --- | --- | --- |
+| 1 · Service and demo | FastAPI search endpoint with models/index loaded once, bounded GPU request queue, configurable base/LoRA selection and a Gradio video comparison view | Query → retrieval → reranking → playable results, health/readiness checks, timeout handling and CLIP fallback |
+| 2 · Performance and reproducibility | Fixed query replay, stage timings, request logs, model/index versions and repeatable environment setup | End-to-end p50/p95, throughput, error rate and peak GPU memory under stated concurrency, hardware and cache conditions |
+| 3 · Feedback and temporal evaluation | Versioned relevance/preferences, explicit ties and insufficient-evidence labels, and a manually checked temporal subset | Frozen evaluation split, auditable chosen/rejected pairs and an original/reversed-frame comparison |
+| 4 · RL experiment | A policy that selects a video from a fixed candidate set using an independent relevance reward | SFT versus policy-optimized quality, reward, latency and memory on the same held-out queries |
 
-On the allocated GPU, reuse the full run and the same four-frame Qwen snapshot:
+The service should reuse loaded `Retriever` and `QwenScorer` instances across requests. FastAPI's lifespan mechanism supports initializing shared models before requests are accepted. [FastAPI lifespan documentation](https://fastapi.tiangolo.com/advanced/events/)
 
-```bash
-RUN=runs/jsfusion1k-20261112-212351
-python -m kinetrace compare-depths --input "$RUN/retrieval.jsonl" --videos "$HOME/datasets/MSRVTT/videos" \
-    --qwen-model "$HOME/models/Qwen3-VL-Reranker-2B-9887917" --device cuda --frames 4 \
-    --out "$RUN/reranked-k10.jsonl" > "$RUN/depths-5-10.json" && cat "$RUN/depths-5-10.json"
-```
+For RL, begin with the query, fixed candidate set and video evidence as the observation, a selected candidate as the action, and verified relevance labels as the reward. Support multiple relevant clips where annotations establish them, and keep the test set outside reward construction and tuning. This is a proposed candidate-selection policy experiment.
 
-The command warms up with one query and then measures all queries. For each query it scores ranks 1–5 once and extends to 10, preserving the CLIP order on score ties. The report includes paired Recall, gains and losses versus Top-5, and cumulative reranking time per query (p50/p95 in milliseconds, including decoding and synchronized GPU scoring; model loading, retrieval and file I/O for results are excluded). Both depths use the system's existing filesystem cache.
+A later GRPO experiment would add a generation interface that samples candidate selections and a reward function that scores those outputs. TRL documents grouped sampling and custom rewards. The current reranker exposes next-token yes/no scores, so integrating its video inputs, generation path and the chosen TRL/Transformers versions requires a server smoke run and a fresh memory measurement. [TRL GRPO documentation](https://huggingface.co/docs/trl/main/en/grpo_trainer)
 
-The server measured these paired results on the H200 NVL MIG slice with 16.0 GiB visible. Increasing depth gained 22 first-place hits and lost 21 relative to Top-5.
+For an offline preference-optimization baseline, DPO uses chosen/rejected responses for the same prompt. Feedback collection should preserve the candidate context and explicit preferences needed for that format. [TRL DPO documentation](https://huggingface.co/docs/trl/main/en/dpo_trainer)
 
-| Depth | R@1 | R@5 | R@10 | R@20 | Rerank p50 | Rerank p95 |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| 5 | 38.0% | 52.6% | 60.6% | 70.2% | 329.6 ms | 565.6 ms |
-| 10 | 38.1% | 56.5% | 60.6% | 70.2% | 663.7 ms | 982.2 ms |
+## Development workflow
 
-### Qwen LoRA training pilot
-
-From the school-server checkout in a GPU allocation:
-
-```bash
-conda activate "$HOME/conda-envs/kinetrace"
-python -m pip install -r requirements-sft.txt
-bash scripts/sft_pilot.sh
-```
-
-The driver expects the existing ZIP and test CSV under `MSRVTT_ROOT` (default `~/datasets/MSRVTT`). It downloads the public train_9k captions once, excludes test IDs by checking disjointness, samples 32 training and 16 validation videos by fixed seed, extracts those clips into its run directory, and mines negatives on the training corpus only. Each query provides its labeled clip and the highest-ranked candidate outside the known positives for that caption. Such negatives are weak labels.
-
-One optimizer step accumulates the mean next-token loss for a positive “yes” and a negative “no”, using separate forwards. Only language attention Q/V LoRA parameters train. `SFT_STEPS` defaults to 1 for a backward-pass smoke check. The driver reloads the adapter in a new process and evaluates both versions on the same five candidates per validation query. Inspect `adapter/train-report.json` for loss, gradient norm and peak allocated GPU memory, and `metrics-{base,adapted}.json` for validation Recall. The one-step pilot checks the training path; measuring a quality improvement requires a larger held-out validation corpus and training run. Use `RUN_ROOT` and `QWEN_DIR` to override the output parent and base snapshot.
-
-In server pilot `sft-pilot-88OF3hW6`, one step used one sampled positive/negative pair out of 32 available pairs. The A100-SXM4-80GB MIG 2g.20gb exposed 19.5 GiB. Training reported 1,605,632 trainable parameters, loss 4.8071, pre-clipping gradient norm 14.4618 and peak allocated GPU memory 4.0392 GiB. Reloading the adapter succeeded. On the 16 validation queries, base Qwen hit 15 first places and the adapter hit 14; both retained 16/16 at five.
-
-To inspect exactly which queries changed on the completed pilot, run:
-
-```bash
-RUN=runs/sft-pilot-88OF3hW6
-python -m kinetrace compare-runs --baseline "$RUN/val-base.jsonl" --input "$RUN/val-adapted.jsonl"
-```
-
-For a larger training-side comparison, use the same base, four frames, fixed seed, and Top-5 candidates. The command below samples one caption per video and requests 256 optimizer updates. Inspect `available_pairs` to see how many queries supplied usable negatives. The new validation corpus has 128 candidates per query before CLIP shortlisting; compare the two models within this run. The driver saves the per-query gains and losses to `paired.json`.
-
-```bash
-SFT_TRAIN_VIDEOS=256 SFT_VAL_VIDEOS=128 SFT_STEPS=256 bash scripts/sft_pilot.sh
-```
-
-Server run `sft-pilot-zxCXNv5N` trained for 256 updates on 256 available positive/negative pairs. PyTorch reported 4.104 GiB peak allocated on the H200 NVL MIG slice with 16.0 GiB visible. On the same 128 validation queries, CLIP ranked 69 targets first, base Qwen ranked 77 first and adapted Qwen ranked 82 first. All three placed 105 targets in the top five. Relative to base Qwen, the adapter gained seven first-place hits and lost two (+3.91 percentage points at R@1).
-
-To evaluate this fixed checkpoint on JSFusion 1K-A, reuse the original CLIP candidates and the existing base-Qwen Top-5 run. Store the evaluation alongside this adapter:
-
-```bash
-EVAL=runs/jsfusion1k-20261112-212351
-SFT=runs/sft-pilot-zxCXNv5N
-python -m kinetrace rerank --input "$EVAL/retrieval.jsonl" --videos "$HOME/datasets/MSRVTT/videos" \
-    --qwen-model "$HOME/models/Qwen3-VL-Reranker-2B-9887917" --adapter "$SFT/adapter" \
-    --top-k 5 --frames 4 --device cuda --out "$SFT/test1k-k5.jsonl" && \
-python -m kinetrace metrics --input "$SFT/test1k-k5.jsonl" > "$SFT/test1k-metrics.json" && \
-python -m kinetrace compare-runs --baseline "$EVAL/reranked-k5.jsonl" --input "$SFT/test1k-k5.jsonl" > "$SFT/test1k-paired.json"
-```
-
-On JSFusion 1K-A, base Qwen ranked 380 of 1,000 targets first and the adapter ranked 365 first (18 gains and 33 losses). To inspect the changed cases, sample ten from each group directly from the saved comparison on the school server:
-
-```bash
-SFT=runs/sft-pilot-zxCXNv5N
-python -m kinetrace review-changes --input "$SFT/test1k-paired.json" --videos "$HOME/datasets/MSRVTT/videos" \
-    --seed 42 --per-outcome 10 --out "$SFT/test1k-review.html"
-```
-
-Download the HTML from JupyterLab and open it locally. It mixes the two groups, shuffles the two clips for each query and keeps ranks and model names off the page. Export the judgments before closing. Match the exported query IDs and A/B video IDs to `test1k-paired.json` for analysis. Each group is sampled separately, so report judgments by group.
-
-### Compare random and CLIP-mined training negatives
-
-From the server checkout in the same GPU environment, run:
-
-```bash
-python -m scripts.compare_sft_negatives runs/sft-pilot-zxCXNv5N
-```
-
-The driver trains one fresh adapter from the original Qwen base. It reads the frames, step count, device and seed from the saved hard-negative training report. For each query that had a usable CLIP negative, it samples one video uniformly from the distinct targets in the training run, excluding all labeled targets for that normalized caption. A separate random generator keeps the positive examples and their shuffled training order matched. The new adapter includes the sampled `training-pairs.jsonl` for inspection.
-
-The driver scores the new adapter on the saved validation shortlist and reuses the existing base and hard-negative rankings. It prints R@1, R@5 and paired gains and losses, and writes per-query changes to `random-negative-*/validation.json` inside the pilot directory. In `hard_to_random`, a gain means that switching from the hard-negative adapter to the random-negative adapter moved the labeled target to first place. For the 256-step pilot, the reference counts are 77/128 for base Qwen and 82/128 for hard-negative LoRA.
-
-## GitHub workflow
-
-Use this project directory as the repository root. The GitHub remote is https://github.com/Asuka008/KineTrace.git. For an empty remote, run the commands below on the Mac. If you already have a repository with commits, start from its clone and copy these source files into that checkout.
-
-```bash
-git init -b main
-git add .
-git commit -m "Bootstrap KineTrace video retrieval and reranking"
-git remote add origin https://github.com/Asuka008/KineTrace.git
-git push -u origin main
-```
-
-On the school server, clone that URL once. For subsequent changes, run the local checks, commit and push from the Mac, then run `git pull --ff-only` from the server checkout. The project conventions are in [AGENTS.md](AGENTS.md). Datasets, model weights, indexes and run outputs live on the server.
+Develop and run small offline CPU checks on the Mac. Synchronize source and dependency specifications through GitHub, then pull on the school server for training, inference and benchmarks. Keep videos, weights, indexes and outputs outside Git. Use `~/conda-envs/kinetrace` for the server environment, and size jobs from the memory actually visible to PyTorch inside the allocation. Repository conventions are recorded in [AGENTS.md](AGENTS.md).
 
 ## Mac smoke check
 
@@ -314,8 +234,11 @@ The optional English rendering goes to CLIP. Qwen receives the original query. F
 | `kinetrace/retrieval.py` | Frame/text encoding, index persistence and candidate retrieval |
 | `kinetrace/reranker.py` | Ordered video input and binary relevance scoring |
 | `kinetrace/ranking.py` | Candidate-prefix reranking and Recall@K |
+| `kinetrace/sft.py` | Training-pair selection and LoRA updates |
+| `kinetrace/review.py` | Portable, randomized A/B video review pages |
 | `kinetrace/__main__.py` | CLI entry points |
 | `scripts/baseline.sbatch` | Pilot and full first-stage runs |
+| `scripts/sft_pilot.sh` | Train-side preparation, training, adapter reload and paired validation |
 | `tests/test_smoke.py` | Local offline checks |
 
 [CLIP checkpoint](https://huggingface.co/openai/clip-vit-base-patch32) · [FAISS inner-product search](https://github.com/facebookresearch/faiss/wiki/MetricType-and-distances) · [Qwen reranker model card](https://huggingface.co/Qwen/Qwen3-VL-Reranker-2B)
