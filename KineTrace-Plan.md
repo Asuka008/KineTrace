@@ -1,36 +1,51 @@
-# KineTrace
-**Temporal Video Search and Reranking · 初步项目计划**
+# KineTrace project plan
 
-目标是交付一个能解释排序结果的短视频检索系统。面试演示时，输入“红车在雨中侧滑，随后恢复控制”，并排展示召回和精排结果。点开同一候选，能看到视频、按时间排列的采样帧，以及它在两个阶段的名次。
+Deliver a video search system that retrieves clips from a description, explains ranking changes and can improve selection from measured feedback. Current priorities follow the completed LoRA milestone.
 
-已完成实验的指标、人工复核结论与待验证项汇总见 [实验结论](EXPERIMENTS.md)。
+## Completed model work
 
-## 第一版要回答的三个问题
+- Frozen CLIP and base Qwen have a recorded MSR-VTT JSFusion 1K-A baseline. Top-5 Qwen improves R@1 from 28.9% to 38.0%.
+- The retained hard-negative LoRA improves training-side validation R@1 from 77/128 to 82/128. Its 1K-A result is 365/1,000 compared with base Qwen's 380/1,000.
+- Negative-sampling and soft-label controls have recorded results and video review tools. The retained SFT checkpoint is `runs/sft-pilot-zxCXNv5N/adapter`.
+- Prior experiments are recorded in `EXPERIMENTS.md`. The model stage supplies a working training and inference component for the service.
 
-1. 双塔能否把正确视频放进前 20？记录 R@20，作为此次精排可以达到的 R@1 上限。
-2. 在相同的 20 个候选里，Qwen 能否把动作、先后顺序和结果均正确的片段提到第一？比较 R@1，并回看名次提高和下降的案例。
-3. 精排 5、10、20 个视频各花多少时间？在同一显存切片上画出 R@1 与端到端 p95 延迟的关系，选择 Demo 默认值。
+## Milestones and acceptance
 
-## 四个里程碑
+| Order | Milestone | Implemented locally | School-server acceptance |
+| --- | --- | --- | --- |
+| 1 | Search service | FastAPI lifecycle, resident CLIP/Qwen, one inference worker, bounded queue, deadlines, CLIP fallback, index-scoped video serving, browser comparison page | Start in one GPU allocation, record actual visible memory, query and play a returned clip |
+| 2 | Performance | Serial query replay with client p50/p95, throughput, errors, fallbacks and successful-request recall | Run the 32-query pilot, then the full fixed split, record hardware and cache conditions |
+| 3 | Feedback collection | SQLite decisions, selected action, probabilities, features, model/index metadata, idempotent explicit feedback | Collect train-side query judgments, inspect rated coverage and sampled actions |
+| 4 | Contextual bandit | Epsilon-greedy selection, weighted ridge reward fitting, query-held-out IPS/SNIPS and effective sample size | Evaluate a candidate against Qwen Top-1 on the same logged actions and deploy a reviewed artifact for a controlled comparison |
+| 5 | Temporal quality | Existing chronological frame sampling | Construct verified order-sensitive queries and compare original/reversed frames |
 
-| 阶段 | 实验 | 验收物 |
-| --- | --- | --- |
-| 1 · 可复现基线 | 先用 32 条做链路检查。用冻结 CLIP、每段 4 帧、平均池化和 FAISS 得到候选。固定协议后用 MSR-VTT 1K-A 测一次。 | 已完成 32 条 pilot 和 1K-A 基线。CLIP R@1 为 28.9%，R@20 为 70.2%；Top-5 Qwen 将 R@1 提升至 38.0%。保存了候选、排名及设备记录。 |
-| 2 · 训练召回 | 从训练视频中按 video ID 划出固定验证集。缓存 CLIP 帧特征，训练一个小投影层或时序池化层。先比较冻结基线与双向 InfoNCE，再加入上一轮索引挖出的难负例。 | 固定验证库的三组对照；列出因难负例而进出 Top-20 的样本。 |
-| 3 · 时序精排 | 同一批候选先跑零样本 Qwen3-VL-Reranker-2B，再训练 LoRA。比较固定帧数下的原始/逆序帧，以及固定候选深度下的零样本/微调排序。 | 已完成 Top-5/10 成对测量、LoRA 训练与盲评入口。硬负例 LoRA 在 128 条验证集上由 77 提升至 82 个首位命中，在 1K-A 上由 380 降至 365。10% “yes” 软标签负例 LoRA 在同一验证集上命中 80/128。3 条首选差异的盲评汇总为 2 对同样符合、1 对需要声音，未产生版本偏好票。时序子集和正反转对照待完成。 |
-| 4 · 交付 | Gradio 并排展示两列排名；把已加载的检索器与精排器封装到 FastAPI。对同一组 query 回放测量。 | 短演示、实验表、单请求 p50/p95、稳态吞吐、峰值显存。当前 CLI 可作为服务接口的底层入口。 |
+Local verification uses small CPU fixtures. GPU service execution, concurrent throughput and policy uplift await server measurements.
 
-## 数据与监督
+## RL design decision
 
-- **公开基准。** MSR-VTT 原始数据约 10,000 个视频、200,000 对文本描述。采用 JSFusion 1K-A 的固定 1,000 条英文查询和 1,000 个候选视频；训练、调参、挖负例只使用训练侧划分。确定设置后再汇总测试结果。[原始论文](https://openaccess.thecvf.com/content_cvpr_2016/html/Xu_MSR-VTT_A_Large_CVPR_2016_paper.html) · [划分说明](https://huggingface.co/datasets/VLM2Vec/MSR-VTT)
-- **难负例。** 对每条训练 query，从召回前列挑选物体、场景相似的视频；排除同一 video ID 的其他描述和已知正例。抽查“未标注但同样正确”的候选。小 batch 时先用缓存 embedding 提供更多负例，单纯梯度累积不会扩大同一步的对比集合。
-- **时序小集。** 独立准备约 30–50 组人工核验的对照。每组包含 query、正例、干扰视频、关键事件时间点和错误类型。例如将“侧滑后恢复”与“持续侧滑”区分开，或用“打开后关上”和“关上后打开”测试顺序。候选需要确实出现在画面中。同源剪辑归入同一划分。报告正例分数超过干扰项的比例和打平数，并标明样本量。该小集与公开基准分别报告。
-- **语言。** 首轮 benchmark 使用官方英文描述。中文 Demo 可以为 CLIP 显式提供英文检索文本，Qwen 保留原始中文 query。自动翻译或多语双塔属于之后的对照实验。
+The first RL component is a contextual bandit operating on the Qwen-scored candidate set. The context consists of query-dependent retrieval/relevance scores and ranks. The action selects a suggested video, and an explicit relevance judgment supplies reward 1 or 0. This formulation matches a single search decision with feedback on the selected clip. Contextual bandit approaches have been evaluated in large recommendation systems, and epsilon-greedy exploration with logged action probabilities supports counterfactual evaluation. [Recommendation research](https://www.microsoft.com/en-us/research/publication/a-contextual-bandit-approach-to-personalized-news-article-recommendation-3/) · [Vowpal Wabbit contextual bandits](https://vowpalwabbit.org/docs/vowpal_wabbit/python/latest/tutorials/python_Contextual_bandits_and_Vowpal_Wabbit.html)
 
-## 算力与测量
+The initial greedy choice is Qwen Top-1. With epsilon 0.1, 90% of selection probability exploits that choice and 10% explores uniformly across the scored prefix. At five candidates, the logged probabilities are 0.92 for the greedy action and 0.02 for each other action. A trained policy uses the same exploration rule around its linear predicted reward. Training is CPU-only and produces a versioned JSON artifact. The model is selected at service startup.
 
-先读取 A100 切片对当前进程可见的 GiB。召回从每段 4 帧开始，FAISS 在 CPU 上运行。两阶段分进程加载；Qwen 从单 query、单候选前向开始，记录 4 帧和 8 帧的显存与质量。LoRA 优先冻结视觉编码器，必要时再评估 4-bit QLoRA、梯度检查点和视觉 token 预算；由实际测量决定训练配置。
+The reward model uses five features, including a bias, CLIP cosine score, Qwen yes probability, reciprocal CLIP rank and reciprocal Qwen rank. It fits selected-action rewards using inverse-propensity-weighted ridge regression with regularization 1. This baseline can learn how to combine the existing model signals. Its effectiveness depends on feedback diversity and feature adequacy.
 
-离线建库单独记录 videos/s。在线测量排除模型加载和离线建库，预热后按单条 query 计时，覆盖文本编码、检索、候选解码与精排。计时边界同步 CUDA，记录样本数、候选数、帧数、缓存状态及 GPU 型号。固定相同候选比较精排器，固定相同视频库比较召回器。
+## Evaluation protocol
 
-**软标签对照已完成训练、验证和盲评汇总，当前保留硬负例适配器。** 服务器运行 `soft-negative-ot0fnqdz` 的首位命中由 82/128 降至 80/128，R@5 均为 105/128。全部 3 对差异视频均已填写判断，其中 2 对同样符合，1 对需要声音才能判断，版本偏好票为零。需要声音的这一对仍未判定优劣，逐条判断与基准损失的对应关系需依据原始复核记录确认。训练召回、时序小集及正反转对照、Top-20 精排、端到端延迟和 Demo 仍待完成。实际命令和已记录的服务器测量见 [README](README.md)。
+1. Collect learning feedback against training-side videos. Keep official test queries and their judgments outside the training database.
+2. Record a decision before returning the recommendation. Store every candidate's features, the sampled action, the probability distribution, query text and model/index metadata.
+3. Record only explicit binary relevance feedback. Unrated and audio-dependent decisions retain missing rewards. A duplicate identical vote is idempotent, and a conflicting repeat is rejected.
+4. Assign normalized query text to a fixed hash split, approximately 80% for fitting and 20% for evaluation. Repeated queries stay in one split. Use the held-out split consistently and reserve fresh data for final assessment after repeated tuning.
+5. Report baseline and candidate IPS/SNIPS on logged actions, matched counts, maximum importance weight and effective sample size. Small effective sample size leaves estimates uncertain. Optional feedback can be selectively missing, so report rated coverage and assess that selection bias before interpreting reward estimates as traffic-wide gains.
+6. Verify policy improvements through a controlled deployment comparison on fresh feedback. Deploy by explicitly selecting the model artifact. Preserve the prior model artifact to allow rollback.
+
+The first implementation optimizes one recommended clip. Whole-list ranking, longer interaction sequences and user personalization require additional state, feedback and evaluation design. [Offline policy evaluation](https://vowpalwabbit.org/docs/vowpal_wabbit/python/latest/tutorials/off_policy_evaluation.html)
+
+## Resource and deployment constraints
+
+Use the existing `~/conda-envs/kinetrace` server environment and dependency specifications. Read GPU properties inside each allocation. The latest measured training allocation exposed 16 GiB, and resident CLIP plus Qwen service memory still needs measurement. A service timeout preserves exclusive ownership of the GPU worker until the running operation finishes. Queue capacity bounds active and waiting requests.
+
+Run outputs, videos, weights, indexes and feedback databases stay outside Git. The service listens on loopback by default and can be reached through the school's authenticated tunnel or proxy. Run a separate service without feedback logging for benchmark replay. The demo and API share the same loaded pipeline.
+
+## Later extensions
+
+After service measurements and contextual-bandit feedback, assess concurrent load, richer context features, learned retrieval and the temporal subset. A generative policy-gradient experiment can follow once a task requires sampled outputs or multi-step actions, with an explicit reward definition and GPU budget. Current deliverables and commands are maintained in the README.

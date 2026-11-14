@@ -14,7 +14,7 @@ Search short videos from a natural-language description. KineTrace retrieves can
 
 The LoRA validation run uses 256 available training pairs, 256 optimizer updates and seed 42. It gains seven first-place hits and loses two relative to the base model. Training and validation videos are disjoint, and the same held-out shortlist is used for both models.
 
-**Generalization result.** On JSFusion 1K-A, the retained LoRA reaches 36.5% R@1 versus 38.0% for base Qwen at Top-5. The validation gain therefore remains specific to the reported development split. Full results, negative-sampling controls and human reviews are available in the experiment summary. [实验结论汇总](EXPERIMENTS.md)
+**Generalization result.** On JSFusion 1K-A, the retained LoRA reaches 36.5% R@1 versus 38.0% for base Qwen at Top-5. The validation gain therefore remains specific to the reported development split.
 
 ## Implemented pipeline
 
@@ -28,7 +28,7 @@ The LoRA validation run uses 256 available training pairs, 256 optimizer updates
 | Evaluation | Report Recall@K, pair gains/losses by query ID, and export randomized A/B video reviews with judgment tallying |
 | Run artifacts | Save candidates, model settings, sampled training pairs, the last gradient norm and actual visible/peak allocated GPU memory in the server run directory |
 
-Current delivery is a Python CLI with school-server training and evaluation runs. The LoRA training and evaluation milestone is complete. The next milestone is a query service with a playable comparison demo and measured request performance.
+Current delivery includes the training/evaluation CLI, a resident-model search API, a browser video comparison view, and an optional contextual-bandit feedback loop. Service and bandit behavior has local CPU fixture coverage. Model-backed service performance and bandit quality gains await school-server measurement.
 
 ## Reproduce the LoRA experiment
 
@@ -98,24 +98,86 @@ python -m kinetrace review-changes --input "$RUN/retained-paired.json" \
 
 </details>
 
+## Search service and browser demo
+
+From the school-server checkout inside a GPU allocation, run the service against an existing index and the retained LoRA adapter.
+
+```bash
+git pull --ff-only origin main
+conda activate "$HOME/conda-envs/kinetrace"
+python -m pip install -r requirements-service.txt
+python -m kinetrace serve \
+    --index runs/jsfusion1k-20261112-212351/index \
+    --videos "$HOME/datasets/MSRVTT/videos" \
+    --current-sft --device cuda --frames 4 \
+    --host 127.0.0.1 --port 8000 --max-pending 4 --timeout-s 30
+```
+
+Open `http://127.0.0.1:8000/` through your server's port forwarding. If Jupyter provides a port proxy, use its `/proxy/8000/` URL including the trailing slash. The page shows CLIP and Qwen results side by side with video playback. `/docs` exposes the API schema. Launching without an adapter selects base Qwen, with `--qwen-model` available for a local snapshot.
+
+The service loads CLIP, the FAISS index and Qwen once. One inference thread serializes GPU work, including work still finishing after a request timeout. `--max-pending` bounds active plus queued requests. Overflow returns HTTP 503. A deadline after retrieval or a reranker error returns the complete CLIP ranking with `fallback=true`. A deadline before retrieval completes returns HTTP 504. Startup logs and `/readyz` record the GPU memory actually visible to PyTorch. Successful full reranks include peak allocated and reserved memory, which includes resident models.
+
+```bash
+curl http://127.0.0.1:8000/readyz
+curl -X POST http://127.0.0.1:8000/search \
+    -H 'Content-Type: application/json' \
+    -d '{"query":"a person walking a dog","retrieval_k":20,"rerank_k":5}'
+```
+
+The response includes `retrieval`, `candidates`, model/index metadata, per-stage timings and fallback status. The health endpoint is `/healthz`. Video serving is limited to existing files belonging to the loaded index. The default listener is loopback for use through an authenticated server tunnel or proxy.
+
+### Measure the service
+
+With the service running, replay queries from a second server terminal. This command uses one client at a time, warms up once and records HTTP latency including queueing, serialization and local network overhead.
+
+```bash
+python -m scripts.benchmark_service \
+    --url http://127.0.0.1:8000 \
+    --csv "$HOME/datasets/MSRVTT/MSRVTT_JSFUSION_test.csv" \
+    --limit 32 --out runs/service-pilot.json
+```
+
+The report contains p50/p95, successful requests per second, error and fallback counts, Recall on successful requests and measured GPU peaks. Remove `--limit` for the complete split. Run benchmark replay with feedback logging disabled so replayed queries stay outside collected human feedback. Concurrent throughput and long-running stability remain future measurements.
+
+## Contextual bandit feedback and training
+
+The first RL extension uses epsilon-greedy selection among the Qwen-scored candidates. It learns a small linear reward model from query-dependent CLIP/Qwen scores and ranks. Contextual bandits are an established approach for recommendation with partial feedback and changing candidate sets. [Contextual bandit research](https://www.microsoft.com/en-us/research/publication/a-contextual-bandit-approach-to-personalized-news-article-recommendation-3/) · [Exploration and propensity logging](https://vowpalwabbit.org/docs/vowpal_wabbit/python/latest/tutorials/python_Contextual_bandits_and_Vowpal_Wabbit.html)
+
+Enable the feedback loop by restarting the service with these arguments.
+
+```bash
+python -m kinetrace serve \
+    --index runs/sft-pilot-zxCXNv5N/train-index \
+    --videos runs/sft-pilot-zxCXNv5N/data/videos --current-sft \
+    --bandit-log runs/train-feedback.sqlite3 --epsilon 0.1
+```
+
+The demo adds a suggested video and explicit “Matches” / “Does not match” buttons. Initially the policy exploits Qwen's first choice with probability 0.9 and explores uniformly with probability 0.1. At five candidates, the first choice has probability 0.92 and each other candidate has probability 0.02. A decision records all candidate features, the selected action, its full probability distribution and model/index identity before returning the recommendation. Repeated identical feedback is idempotent. Conflicting feedback returns HTTP 409. Leave uncertain or audio-dependent examples unrated.
+
+Collect feedback on development queries drawn from training-side videos. The feedback command above uses that run's training index and extracted clips. The 1K-A index in the earlier service example is for service evaluation. Its judgments belong to test evaluation and should be kept in a separate database from training feedback.
+
+After collecting rated queries, fit and evaluate on CPU.
+
+```bash
+python -m kinetrace bandit-train \
+    --database runs/train-feedback.sqlite3 --out runs/bandit-v1.json
+```
+
+The command fits inverse-propensity-weighted ridge regression on the selected actions. Normalized queries are split deterministically into approximately 80% training and 20% evaluation, keeping repeated queries together. It reports baseline/candidate IPS, SNIPS, matched actions, effective sample size and the number of unrated decisions. A run needs rated queries in both splits. These estimates evaluate a frozen greedy policy on the logged candidate sets. Feedback coverage, support and sample size affect their interpretation. [Offline policy evaluation](https://vowpalwabbit.org/docs/vowpal_wabbit/python/latest/tutorials/off_policy_evaluation.html)
+
+Load a reviewed model with `--bandit-model runs/bandit-v1.json` together with `--bandit-log`. This enables epsilon-greedy exploration around its predicted reward scores. The rollout decision is explicit through the server command. The implementation is a small CPU baseline, with mathematical/API fixtures and no measured online uplift yet.
+
 ## Next milestones
 
-These are planned extensions. The current CLI supplies the retrieval, scoring and evaluation components.
-
-| Priority | Deliverable | Acceptance evidence |
+| Stage | Current status | Next acceptance evidence |
 | --- | --- | --- |
-| 1 · Service and demo | FastAPI search endpoint with models/index loaded once, bounded GPU request queue, configurable base/LoRA selection and a Gradio video comparison view | Query → retrieval → reranking → playable results, health/readiness checks, timeout handling and CLIP fallback |
-| 2 · Performance and reproducibility | Fixed query replay, stage timings, request logs, model/index versions and repeatable environment setup | End-to-end p50/p95, throughput, error rate and peak GPU memory under stated concurrency, hardware and cache conditions |
-| 3 · Feedback and temporal evaluation | Versioned relevance/preferences, explicit ties and insufficient-evidence labels, and a manually checked temporal subset | Frozen evaluation split, auditable chosen/rejected pairs and an original/reversed-frame comparison |
-| 4 · RL experiment | A policy that selects a video from a fixed candidate set using an independent relevance reward | SFT versus policy-optimized quality, reward, latency and memory on the same held-out queries |
+| LoRA SFT | Training, adapter reload and paired evaluation completed | Retained adapter available through CLI and service |
+| Service and demo | API, bounded inference queue, fallback, playback and feedback implemented | School-server startup, actual visible memory and successful query/video playback |
+| Performance | Serial HTTP replay command implemented | Measured p50/p95, throughput, errors and memory, followed by concurrent load tests |
+| Contextual bandit | Exploration, durable feedback, reward-model fitting and offline evaluation implemented | Train-side feedback with sufficient action coverage, held-out evaluation and a controlled deployment comparison |
+| Temporal evaluation | Planned | Verified temporal subset and original/reversed-frame comparison |
 
-The service should reuse loaded `Retriever` and `QwenScorer` instances across requests. FastAPI's lifespan mechanism supports initializing shared models before requests are accepted. [FastAPI lifespan documentation](https://fastapi.tiangolo.com/advanced/events/)
-
-For RL, begin with the query, fixed candidate set and video evidence as the observation, a selected candidate as the action, and verified relevance labels as the reward. Support multiple relevant clips where annotations establish them, and keep the test set outside reward construction and tuning. This is a proposed candidate-selection policy experiment.
-
-A later GRPO experiment would add a generation interface that samples candidate selections and a reward function that scores those outputs. TRL documents grouped sampling and custom rewards. The current reranker exposes next-token yes/no scores, so integrating its video inputs, generation path and the chosen TRL/Transformers versions requires a server smoke run and a fresh memory measurement. [TRL GRPO documentation](https://huggingface.co/docs/trl/main/en/grpo_trainer)
-
-For an offline preference-optimization baseline, DPO uses chosen/rejected responses for the same prompt. Feedback collection should preserve the candidate context and explicit preferences needed for that format. [TRL DPO documentation](https://huggingface.co/docs/trl/main/en/dpo_trainer)
+The project plan records the service-first sequence and the feedback evaluation protocol. [Project plan](KineTrace-Plan.md)
 
 ## Development workflow
 
@@ -130,7 +192,7 @@ python3 -m unittest discover -s tests -v
 python3 -m kinetrace --help
 ```
 
-These commands use the standard library and work offline.
+Core checks use the standard library and work offline. HTTP service fixtures require the FastAPI/httpx dependencies in `requirements-service.txt`. The tests use stub retrieval/scoring and temporary files.
 
 ## School server setup
 
@@ -217,8 +279,7 @@ Compare with the original `metrics.json`. This command reorders the first five o
 
 ```bash
 python -m kinetrace search --index "$RUN/index" \
-    --query '一辆红色汽车在雨天侧滑，随后恢复控制。' \
-    --retrieval-text 'A red car skids on a wet road and then regains control.' \
+    --query 'A red car skids on a wet road and then regains control.' \
     --top-k 10 --out "$RUN/one-query.jsonl"
 python -m kinetrace rerank --input "$RUN/one-query.jsonl" --videos "$VIDEO_DIR" \
     --top-k 5 --frames 4 --out "$RUN/one-query-ranked.jsonl"
@@ -235,6 +296,9 @@ The optional English rendering goes to CLIP. Qwen receives the original query. F
 | `kinetrace/reranker.py` | Ordered video input and binary relevance scoring |
 | `kinetrace/ranking.py` | Candidate-prefix reranking and Recall@K |
 | `kinetrace/sft.py` | Training-pair selection and LoRA updates |
+| `kinetrace/service.py` | Resident-model API, bounded admission, deadlines and media serving |
+| `kinetrace/bandit.py` | Exploration, SQLite feedback, reward fitting and off-policy evaluation |
+| `scripts/benchmark_service.py` | Serial HTTP replay and measured service reports |
 | `kinetrace/review.py` | Portable, randomized A/B video review pages |
 | `kinetrace/__main__.py` | CLI entry points |
 | `scripts/baseline.sbatch` | Pilot and full first-stage runs |

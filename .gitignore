@@ -13,4 +13,6 @@ artifacts/
 *.faiss
 *.safetensors
 *.pt
+*.sqlite3
+*.sqlite3-*
 slurm-*.out
