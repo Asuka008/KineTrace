@@ -3,6 +3,8 @@
 
 Find a short clip from a description such as “a red car skids on a wet road, then recovers.” A first-stage retriever narrows the corpus. A second-stage vision-language model scores the ordered frames of each shortlisted clip against the original query.
 
+The experiment summary consolidates measured results, human reviews and remaining validation gaps. [实验结论汇总](EXPERIMENTS.md)
+
 | Stage | Initial implementation |
 | --- | --- |
 | Offline indexing | Sample frames across each MP4, encode them with frozen CLIP ViT-B/32, normalize, mean-pool and normalize again. Persist a FAISS CPU IndexFlatIP and an ordered video-ID manifest. |
