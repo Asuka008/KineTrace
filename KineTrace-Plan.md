@@ -36,7 +36,13 @@ Develop on the Mac using small offline CPU fixtures. The user runs model scoring
 
 Each run gets a unique output directory, source revision, environment snapshot, input/adapter hashes, simulated feedback, learned policies, validation rankings and JSON reports. The CPU comparison publishes its directory atomically and rejects an existing output path. Completed training scores can be reused with `bandit-compare` if the later comparison needs rerunning. Videos, models and outputs remain outside Git.
 
-## Current step — base-Qwen frame-order diagnostic
+## Completed base-Qwen frame-order diagnostic
+
+The run `runs/sft-pilot-zxCXNv5N/temporal-base-q4snver7` completed on 2026-11-14. Forward Top-1 predictions match the cached base-Qwen baseline on all 128 queries. Forward and reversed presentations hit 77 and 81 annotated targets, respectively. Reversal changes 35 first choices, comprising 13 gains, nine losses and 13 changes where both choices miss the annotated target.
+
+For 105 scored targets, forward scores are higher in 48 cases, reverse scores in 45 and 12 tie. Mean absolute score change is 0.04477. The result establishes sensitivity to frame order. The directional target-score balance and original-caption labels leave temporal correctness unresolved.
+
+Forward scoring p50/p95 is 1,047.3/1,234.2 ms per query and reverse scoring is 1,057.1/1,307.6 ms. Shared decoding is 144.6/182.3 ms. The H200 NVL MIG allocation exposes 16.0 GiB, with post-warm-up peaks of 4.020 GiB allocated and 4.031 GiB reserved. Decoding and scoring are recorded as separate stages.
 
 Run `python -m scripts.compare_temporal runs/sft-pilot-zxCXNv5N` on the server GPU allocation. Use the base Qwen model with the pilot's 128 validation queries and saved CLIP candidates. Decode each candidate once and score chronological and reversed sampled frames using fixed increasing timestamp slots. Alternate which order runs first. The implementation reuses the reranker's prompt, preprocessing and scoring path.
 
@@ -44,8 +50,8 @@ Report forward Recall, reference-label Recall under reversal, all Top-1 changes,
 
 This first step measures sensitivity to input frame order. Correct temporal reasoning requires verified order-dependent queries and labels for both original and reversed presentations. General retrieval captions can remain valid under reversal or become invalid, so the reference-label metrics support a diagnostic interpretation. The next dataset work should establish which queries require ordering and whether the sampled frames preserve the relevant events.
 
-Local CPU fixtures cover frame reversal, metadata isolation, alternating execution, stable ties, candidate misses and result publication. GPU measurements are pending the server run. The driver and README provide the same command-line entry points.
+Local CPU fixtures cover frame reversal, metadata isolation, alternating execution, stable ties, candidate misses and result publication. The server report supplies the measured values above. The driver and README provide the same command-line entry points.
 
 ## Subsequent work
 
-Review the base-Qwen sensitivity traces, then construct the verified temporal subset and assess correctness on it. The completed LoRA and bandit experiments supply earlier development results. A broader RL experiment should follow an explicit reward specification and evidence that motivates added complexity.
+The base-Qwen sensitivity diagnostic is complete. The next evidence gap is a verified temporal subset with order-dependent descriptions and presentation-specific labels. Assess temporal correctness on that subset. The completed LoRA and bandit experiments supply earlier development results. A broader RL experiment should follow an explicit reward specification and evidence that motivates added complexity.

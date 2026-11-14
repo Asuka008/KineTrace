@@ -98,9 +98,26 @@ python -m kinetrace review-changes --input "$RUN/retained-paired.json" \
 
 </details>
 
-## Next experiment — base-Qwen frame-order sensitivity
+## Base-Qwen frame-order sensitivity
 
-Run this command inside the school-server GPU allocation using the existing environment.
+The completed server run `runs/sft-pilot-zxCXNv5N/temporal-base-q4snver7` evaluated four frames and five candidates for each of 128 validation queries. Fresh forward Top-1 predictions match the cached base-Qwen run on all 128 queries.
+
+| Presentation | Reference-target hits | R@1 | R@5 |
+| --- | ---: | ---: | ---: |
+| Chronological frames | 77/128 | 60.16% | 82.03% |
+| Reversed frames | 81/128 | 63.28% | 82.03% |
+
+Reversal changes the first choice for 35/128 queries (27.34%). It gains 13 annotated-target hits and loses nine, for a net gain of four. The other 13 changed first choices miss the target in both orders. Among the 105 scored annotated targets, 48 score higher chronologically, 45 score higher in reverse and 12 tie at tolerance `1e-6`. Their mean absolute score change is 0.04477, while mean forward-minus-reverse score is -0.000956. These results demonstrate frame-order sensitivity with little directional preference across target scores. Verified temporal-correctness labels are needed to interpret that sensitivity as reasoning quality.
+
+| Measured stage | p50 per query | p95 per query |
+| --- | ---: | ---: |
+| Shared decoding of five candidates | 144.6 ms | 182.3 ms |
+| Forward preprocessing and scoring | 1,047.3 ms | 1,234.2 ms |
+| Reverse preprocessing and scoring | 1,057.1 ms | 1,307.6 ms |
+
+The run used an H200 NVL MIG 1g.18gb with 16.0 GiB visible to PyTorch. Post-warm-up peaks were 4.020 GiB allocated and 4.031 GiB reserved. Timings cover the stages listed separately. The earlier Top-5/10 depth experiment used a separate run and a different timing scope.
+
+To reproduce the diagnostic, run inside the school-server GPU allocation using the existing environment.
 
 ```bash
 git pull --ff-only origin main
@@ -121,7 +138,7 @@ The command prints the output directory `runs/sft-pilot-zxCXNv5N/temporal-base-*
 | `comparison/score-pairs.jsonl` | Per-query/video scores, sampled timestamp slots and reversed source-frame indices |
 | `commit.txt`, `environment.txt`, `provenance.json` | Source revision, dependencies and input provenance |
 
-Warm-up covers one candidate in both orders. The first-scored order alternates across queries and candidates. Reported scoring p50/p95 covers preprocessing and synchronized model inference over the scored prefix. Shared decoding is timed separately, and model loading occurs before timing. The score comparison uses absolute tie tolerance `1e-6`. Targets outside the scored prefix are counted explicitly. These measurements use small offline CPU fixtures locally; model-backed results await the server run.
+Warm-up covers one candidate in both orders. The first-scored order alternates across queries and candidates. Reported scoring p50/p95 covers preprocessing and synchronized model inference over the scored prefix. Shared decoding is timed separately, and model loading occurs before timing. The score comparison uses absolute tie tolerance `1e-6`. Targets outside the scored prefix are counted explicitly. Local CPU fixtures cover the implementation. The table above records the completed model-backed server measurements.
 
 For a separate raw retrieval run, use the general CLI with explicit paths.
 
@@ -195,7 +212,7 @@ python -m kinetrace bandit-compare \
 | --- | --- | --- |
 | LoRA SFT | Training, adapter reload and paired evaluation completed | Reference checkpoint for candidate-policy comparisons |
 | Offline contextual bandit | Three-seed pilot completed, mean R@1 64.32% versus LoRA 64.06% | Broader held-out evidence before adopting a policy |
-| Frame-order sensitivity | Base-Qwen paired-frame CLI implemented | Server score/ranking changes and measured resource use |
+| Frame-order sensitivity | Server diagnostic completed, 35/128 Top-1 changes and 4.020 GiB peak allocated | Recorded score/ranking traces support temporal-label review |
 | Temporal understanding | Planned | Verified order-dependent captions and labels for original/reversed presentations |
 | Final evaluation | Planned | Fixed settings and fresh held-out quality measurements |
 
