@@ -43,7 +43,12 @@ def write_review(args):
         eligible = len(pool)
         sample = rng.sample(pool, min(args.limit, eligible))
         top_keys = ("clip_top", "qwen_top")
-    with output_file(args.out) as page:
+    write_page(args.out, args.videos, sample, top_keys, rng, reveal_clip_ranks=not paired)
+    return {"review": str(args.out), "eligible": eligible, "query_ids": [r["query_id"] for r in sample]}
+
+
+def write_page(out, videos, sample, top_keys, rng, reveal_clip_ranks=False, preference=False):
+    with output_file(out) as page:
         page.write('''<!doctype html><html lang="zh"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>KineTrace 视频复核</title><style>
@@ -60,15 +65,21 @@ select,button{font:inherit;padding:.3em}details,label{display:block;margin:.6em 
             a, b = clips
             page.write(f'<section data-query="{qid}" data-a="{escape(a)}" data-b="{escape(b)}">'
                        f'<h2>{qid} · {escape(row["query"])}</h2><div class="pair">')
-            page.write(video_player(args.videos, a, "A"))
-            page.write(video_player(args.videos, b, "B"))
-            page.write('''</div><label>符合描述的片段 <select>
+            page.write(video_player(videos, a, "A"))
+            page.write(video_player(videos, b, "B"))
+            if preference:
+                page.write('''</div><label>哪段更符合描述？<select>
+<option value="">尚未评判</option><option value="A">A 更符合</option><option value="B">B 更符合</option>
+<option value="both">两段同样符合</option>''')
+            else:
+                page.write('''</div><label>符合描述的片段 <select>
 <option value="">尚未评判</option><option value="A">仅 A</option><option value="B">仅 B</option>
-<option value="both">两段都符合</option><option value="neither">两段都不符合</option>
+<option value="both">两段都符合</option>''')
+            page.write('''<option value="neither">两段都不符合</option>
 <option value="audio_required">需要声音才能判断</option>
 <option value="visual_evidence_insufficient">画面或动作证据不足</option>
 <option value="uncertain">无法判断</option></select></label>''')
-            if not paired:
+            if reveal_clip_ranks:
                 page.write(f'<details><summary>查看视频编号与排名</summary>A = {escape(a)}，B = {escape(b)}。'
                            f'标注目标 {escape(row["target"])} 从第 {int(row["clip_rank"])} 降至第 '
                            f'{int(row["qwen_rank"])}，Qwen 首位为 {escape(row["qwen_top"])}。</details>')
@@ -86,4 +97,3 @@ document.getElementById("save").onclick = () => {
   setTimeout(() => URL.revokeObjectURL(link.href), 1000);
 };
 </script></html>''')
-    return {"review": str(args.out), "eligible": eligible, "query_ids": [r["query_id"] for r in sample]}

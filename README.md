@@ -9,7 +9,32 @@ Find a short clip from a description such as “a red car skids on a wet road, t
 | Retrieval | Encode a free-text query or a batch of captions, then return cosine scores and original ranks. |
 | Reranking | Qwen3-VL-Reranker-2B scores one candidate at a time from chronological frames. Keep the first-stage scores, ranks and unscored tail for comparison. |
 | Evaluation | Read an MSR-VTT JSFusion-style CSV. Save candidate JSONL and text-to-video Recall@1/5/10 plus recall at the saved depth. Metrics use fractions. |
-| Planned experiments | Train a contrastive retrieval head, mine hard negatives, fine-tune a reranker adapter, profile latency and build a Gradio comparison view. See the [project plan](KineTrace-Plan.md). |
+| Current SFT | Four-frame Top-5 Qwen with the retained hard-negative LoRA. Select it with `rerank --current-sft` on the school server. |
+
+The retained checkpoint is `runs/sft-pilot-zxCXNv5N/adapter`, the SFT version used in the human review. On JSFusion 1K-A the base, retained and random-negative models hit 380, 365 and 374 first places respectively. Human review found individually preferred clips and plausible alternate matches. Overall human preference across all queries is still unmeasured. For an existing candidate run, select the retained checkpoint explicitly from the repository root:
+
+```bash
+RUN=runs/jsfusion1k-20261112-212351
+python -m kinetrace rerank --current-sft --input "$RUN/retrieval.jsonl" \
+    --videos "$HOME/datasets/MSRVTT/videos" --out "$RUN/retained-sft.jsonl"
+```
+
+### Test a softer target for mined negatives
+
+From the school-server checkout in a GPU allocation, run:
+
+```bash
+git pull --ff-only origin main
+conda activate "$HOME/conda-envs/kinetrace"
+python -m pip install -r requirements-sft.txt
+python -m scripts.compare_soft_sft runs/sft-pilot-zxCXNv5N
+```
+
+The experiment trains a fresh adapter on the original pairs, using 90% “no” and 10% “yes” target mass for each weakly labeled negative. Positives retain the “yes” target. This is an experimental loss weight. The driver reuses the reference base, seed, steps, frames and validation candidates. Before training, it checks that training and validation video IDs are disjoint and the eligible pair count matches the reference. When the reference has a saved `training-pairs.jsonl`, it also checks every pair in order. Older pilots support the pair-count check.
+
+The candidate is saved in a new `soft-negative-*` subdirectory of the supplied pilot. Its `commit.txt` records the source version, and `adapter/train-report.json` records the target weight, GPU model, memory visible to PyTorch and peak allocated training memory. The reference pilot used 256 updates and four frames on a slice with 16.0 GiB visible. Check the new allocation's recorded memory when assessing the run. The soft-target training and validation results await a school-server run.
+
+The console prints the validation recalls and the number of queries with different first choices. Download `review.html` from the new directory when the first choices differ. The page samples up to 20 such queries uniformly regardless of the benchmark label. Rate which clip better satisfies the description and export the judgments. Upload that JSON to the server and tally it with `python -m scripts.compare_soft_sft COMPARISON_DIRECTORY --judgments EXPORTED_JSON`. Ties, missing evidence and unrated pairs are counted separately. Keep the retained SFT as the project choice while assessing the candidate.
 
 **School-server pilot.** Run `pilot32-20261112-204808` used the first 32 JSFusion queries and their 32 videos, with four frames per video and 20 saved candidates. PyTorch reported 16.00 GiB visible on an NVIDIA H200 NVL MIG 1g.18gb. The server's Git ownership check prevented capture of the run's commit hash.
 

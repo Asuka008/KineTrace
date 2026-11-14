@@ -39,6 +39,9 @@ def training_pairs(rows, strategy="hard", seed=42):
 
 
 def train_lora(args):
+    weight = args.negative_yes_weight
+    if not 0 <= weight < 0.5:
+        raise ValueError("Expected negative yes weight in [0, 0.5)")
     import torch
     from peft import LoraConfig, get_peft_model
 
@@ -60,6 +63,7 @@ def train_lora(args):
     scaler = torch.amp.GradScaler("cuda", enabled=use_cuda and not torch.cuda.is_bf16_supported())
     report = {"base": args.qwen_model, "input": str(args.input), "frames": args.frames,
               "negative_strategy": args.negative_strategy,
+              "negative_yes_weight": weight,
               "steps": args.steps, "seed": args.seed, "available_pairs": len(pairs),
               "trainable_parameters": sum(p.numel() for p in params), "device": args.device}
     if use_cuda:
@@ -76,7 +80,11 @@ def train_lora(args):
         for video, label in ((positive, 1), (negative, 0)):
             logits = scorer.next_token_logits(query, video)
             target = torch.tensor([scorer.answer_ids[label]], device=logits.device)
-            loss = torch.nn.functional.cross_entropy(logits.unsqueeze(0), target) / 2
+            loss = torch.nn.functional.cross_entropy(logits.unsqueeze(0), target)
+            if label == 0 and weight:
+                # CE(soft) = CE(no) + w * (logit_no - logit_yes) over the same vocabulary.
+                loss = loss + weight * (logits[scorer.answer_ids[0]] - logits[scorer.answer_ids[1]])
+            loss = loss / 2
             pair_loss += loss.item()
             scaler.scale(loss).backward()
         scaler.unscale_(optimizer)

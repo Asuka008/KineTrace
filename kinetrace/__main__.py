@@ -29,7 +29,11 @@ def parser():
     train.add_argument("--seed", type=int, default=42)
     train.add_argument("--negative-strategy", choices=("hard", "random"), default="hard",
                        help="use the highest-ranked eligible CLIP candidate or sample a training video uniformly")
-    rerank.add_argument("--adapter", type=Path, help="load a trained PEFT adapter on the selected Qwen base")
+    train.add_argument("--negative-yes-weight", default=0.0, type=float,
+                       help="soft target mass on yes for a mined negative (0 <= weight < 0.5)")
+    adapters = rerank.add_mutually_exclusive_group()
+    adapters.add_argument("--adapter", type=Path, help="load a trained PEFT adapter on the selected Qwen base")
+    adapters.add_argument("--current-sft", action="store_true", help="use the retained school-server SFT pilot checkpoint")
     metrics = commands.add_parser("metrics", help="report text-to-video Recall@K")
     compare = commands.add_parser("compare-top1", help="show queries promoted to or displaced from first place")
     paired = commands.add_parser("compare-runs", help="compare first-place hits on identical labeled shortlists")
@@ -103,6 +107,12 @@ def run(args):
     if args.command == "rerank":
         from .reranker import QwenScorer
 
+        if args.current_sft:
+            args.adapter = Path("runs/sft-pilot-zxCXNv5N/adapter")
+            if not args.adapter.is_dir():
+                raise FileNotFoundError(f"Retained SFT adapter missing: {args.adapter}. Run from the pilot checkout.")
+            if args.qwen_model == QWEN_MODEL:
+                args.qwen_model = json.loads((args.adapter / "train-report.json").read_text())["base"]
         scorer = QwenScorer(args.qwen_model, args.device, args.videos, args.frames)
         if args.adapter:
             from peft import PeftModel
@@ -110,7 +120,8 @@ def run(args):
             scorer.model = PeftModel.from_pretrained(scorer.model, str(args.adapter)).eval()
         rows = (rerank_prefix(row, args.top_k, scorer) for row in read_run(args.input))
         write_run(args.out, rows)
-        return {"run": str(args.out), "rerank_top_k": args.top_k, "frames": args.frames}
+        return {"run": str(args.out), "rerank_top_k": args.top_k, "frames": args.frames,
+                "adapter": str(args.adapter) if args.adapter else None}
 
     from .retrieval import Retriever, build_index, retrieve_queries
 
