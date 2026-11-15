@@ -56,8 +56,8 @@ Local CPU fixtures cover frame reversal, metadata isolation, alternating executi
 
 The school-server run `runs/vitatecs-sequence-pa7hogja` compared the original and counterfactual captions on four chronological frames per MSR-VTT video using base Qwen. Across 23 published pairs, it preferred the original 12 times and the counterfactual eight times, with three ties. Strict accuracy was 52.17%. The existing 105-target presentation review is optional. [VITATECS authors' release](https://github.com/lscpku/VITATECS)
 
-## Subsequent work
+The saved pair scores reproduce all 23 outcomes. The largest error favored the reversed yellow/blue bowl sequence by 0.13839. The other seven errors had margins below 0.05 in magnitude, and all three ties had identical saved scores. The experiment log lists all eleven cases. These scores alone cannot establish whether four-frame sampling missed the distinguishing events. [Per-pair analysis](EXPERIMENTS.md#8-对错误与-3-对平局)
 
-Use the completed run's `pairs.jsonl` to inspect the eight incorrect and three tied score margins on CPU. The summary alone cannot identify which captions the model confused.
+## Subsequent work
 
 The completed LoRA and bandit experiments supply earlier development results. A broader RL experiment should follow an explicit reward specification and evidence that motivates added complexity.

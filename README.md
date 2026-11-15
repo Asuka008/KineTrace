@@ -258,7 +258,7 @@ python -m kinetrace bandit-compare \
 | LoRA SFT | Training, adapter reload and paired evaluation completed | Reference checkpoint for candidate-policy comparisons |
 | Offline contextual bandit | Three-seed pilot completed, mean R@1 64.32% versus LoRA 64.06% | Broader held-out evidence before adopting a policy |
 | Frame-order sensitivity | Server diagnostic completed, 35/128 Top-1 changes and 4.020 GiB peak allocated | Recorded score/ranking traces support temporal-label review |
-| Temporal understanding | VITATECS Sequence run completed, 12/23 correct (52.17%) | Use saved pair scores to inspect errors and ties |
+| Temporal understanding | VITATECS Sequence run completed, 12/23 correct (52.17%). All eight errors and three exact ties are documented in [the experiment log](EXPERIMENTS.md#8-对错误与-3-对平局) | Frame-level evidence would be needed to attribute errors to sampling |
 | Final evaluation | Planned | Fixed settings and fresh held-out quality measurements |
 
 The project plan describes the experiment sequence and reward limitations. [Project plan](KineTrace-Plan.md)
