@@ -54,4 +54,6 @@ Local CPU fixtures cover frame reversal, metadata isolation, alternating executi
 
 ## Subsequent work
 
-The base-Qwen sensitivity diagnostic is complete. The next evidence gap is a verified temporal subset with order-dependent descriptions and presentation-specific labels. Assess temporal correctness on that subset. The completed LoRA and bandit experiments supply earlier development results. A broader RL experiment should follow an explicit reward specification and evidence that motivates added complexity.
+The next server action is to run `review-order` on the completed comparison and label the target presentations in its portable A/B page. The implemented workflow covers all 105 scored development targets by default. Reviewers judge order dependence and each presentation's visual match before seeing model scores. Run `tally-order` with the exported labels to build the verified subset and report correct, incorrect and tied score preferences. Record exclusions, the verified denominator and strict pair accuracy once review is complete. Commands are in the README.
+
+The completed LoRA and bandit experiments supply earlier development results. A broader RL experiment should follow an explicit reward specification and evidence that motivates added complexity.

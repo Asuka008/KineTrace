@@ -151,6 +151,30 @@ python -m kinetrace compare-order \
     --out runs/frame-order-comparison
 ```
 
+### Review temporal correctness on the scored targets
+
+On a school-server CPU node, build a portable review page from the completed diagnostic and its original video directory. This reuses both saved Qwen scores. The default covers all 105 validation queries whose annotated target entered the scored prefix. The other 23 have no paired target score. Query order and A/B assignment use seed 42. Eligibility is independent of score changes and Top-1 outcomes.
+
+```bash
+git pull --ff-only origin main
+conda activate "$HOME/conda-envs/kinetrace"
+PILOT=runs/sft-pilot-zxCXNv5N
+RUN="$PILOT/temporal-base-q4snver7"
+python -m kinetrace review-order --input "$RUN/comparison" \
+    --videos "$PILOT/data/videos" --out "$RUN/order-review"
+```
+
+Copy `$RUN/order-review/review.html` to your computer and open it in a browser. Each row shows the original caption and two sequences of the same sampled images, read left to right. The builder checks the sampled indices, FPS and frame count against the saved trace, then embeds lossless images. Scores and the A/B key stay in the server manifest. An optional `--limit N` selects a reproducible random subset for a shorter review. Use a separate output directory for each review.
+
+For each caption, mark whether action order or direction is required, then whether A and B each match. Choose “无法判断” when the visible frames provide insufficient evidence. Progress is saved when the browser allows local storage. Use the same file and browser to resume. After completing every row, download `order-judgments.json`, copy it into `$RUN/order-review/` on the server and tally on CPU.
+
+```bash
+python -m kinetrace tally-order --review "$RUN/order-review" \
+    --judgments "$RUN/order-review/order-judgments.json" --out "$RUN/order-tally"
+```
+
+`labels.jsonl` records every reviewed caption, the unblinded labels and any exclusion reason. `verified.jsonl` contains order-dependent cases where exactly one presentation matches and both judgments are definite. In `summary.json`, strict pair accuracy is the fraction of verified cases where the matching order receives the higher saved score. Ties within `1e-6` count in the denominator and receive zero credit. An empty verified subset yields a null accuracy. This metric applies to the reviewed development targets. Human labels and measured accuracy for the school run are pending.
+
 ## Offline contextual bandit
 
 The completed server run `runs/sft-pilot-zxCXNv5N/bandit-offline-76ce4o18` used 252 training queries after excluding four captions shared with validation. It evaluated the same 128 validation queries at candidate depth five.
@@ -213,7 +237,7 @@ python -m kinetrace bandit-compare \
 | LoRA SFT | Training, adapter reload and paired evaluation completed | Reference checkpoint for candidate-policy comparisons |
 | Offline contextual bandit | Three-seed pilot completed, mean R@1 64.32% versus LoRA 64.06% | Broader held-out evidence before adopting a policy |
 | Frame-order sensitivity | Server diagnostic completed, 35/128 Top-1 changes and 4.020 GiB peak allocated | Recorded score/ranking traces support temporal-label review |
-| Temporal understanding | Planned | Verified order-dependent captions and labels for original/reversed presentations |
+| Temporal understanding | CPU blind review and paired-score evaluation implemented | Complete the human labels and report verified subset size, exclusions and strict pair accuracy |
 | Final evaluation | Planned | Fixed settings and fresh held-out quality measurements |
 
 The project plan describes the experiment sequence and reward limitations. [Project plan](KineTrace-Plan.md)
@@ -336,6 +360,7 @@ The optional English rendering goes to CLIP. Qwen receives the original query. F
 | `kinetrace/ranking.py` | Candidate-prefix reranking and Recall@K |
 | `kinetrace/sft.py` | Training-pair selection and LoRA updates |
 | `kinetrace/temporal.py` | Paired frame-order sensitivity, score traces and timing |
+| `kinetrace/order_review.py` | Blind review of the scored target frames, presentation labels and verified-subset evaluation |
 | `scripts/compare_temporal.py` | Base-Qwen frame-order experiment on the pilot validation split |
 | `kinetrace/bandit.py` | Offline reward simulation, policy fitting and paired evaluation |
 | `scripts/compare_bandit.py` | Retained-LoRA scoring and the offline bandit experiment |

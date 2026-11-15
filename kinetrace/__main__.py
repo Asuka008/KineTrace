@@ -32,6 +32,12 @@ def parser():
     bandit.add_argument("--seeds", type=int, nargs="+", default=[42, 43, 44])
     depths = commands.add_parser("compare-depths", help="measure paired Top-5 and Top-10 reranking")
     order = commands.add_parser("compare-order", help="measure base Qwen sensitivity to reversed sampled frames")
+    order_review = commands.add_parser("review-order", help="build a blind frame-order review from a compare-order directory")
+    order_review.add_argument("--seed", type=int, default=42)
+    order_review.add_argument("--limit", type=positive, help="review a random subset of the scored targets")
+    tally = commands.add_parser("tally-order", help="evaluate saved order scores against completed human labels")
+    tally.add_argument("--review", required=True, type=Path, help="directory produced by review-order")
+    tally.add_argument("--judgments", required=True, type=Path, help="JSON exported from the review page")
     train = commands.add_parser("train-lora", help="fit a yes/no Qwen adapter on train-side CLIP candidates")
     train.add_argument("--steps", type=positive, default=1, help="positive/negative pairs of updates (one optimizer step per pair)")
     train.add_argument("--seed", type=int, default=42)
@@ -64,15 +70,15 @@ def parser():
     for cmd in (check, build, evaluate):
         cmd.add_argument("--csv", type=Path, required=True)
         cmd.add_argument("--limit", type=positive, help="read only the first N query rows")
-    for cmd in (check, build, rerank, review, changes, depths, train, order):
+    for cmd in (check, build, rerank, review, changes, depths, train, order, order_review):
         cmd.add_argument("--videos", required=True, type=Path)
     for cmd in (build, rerank, depths, train, order):
         cmd.add_argument("--frames", type=positive, default=4)
     for cmd in (search, evaluate, rerank, order):
         cmd.add_argument("--top-k", type=positive, default=5 if cmd in (rerank, order) else 20)
-    for cmd in (evaluate, rerank, ranks, review, changes, depths, train, order):
+    for cmd in (evaluate, rerank, ranks, review, changes, depths, train, order, order_review, tally):
         cmd.add_argument("--out", required=True, type=Path)
-    for cmd in (rerank, metrics, ranks, compare, review, changes, depths, train, order):
+    for cmd in (rerank, metrics, ranks, compare, review, changes, depths, train, order, order_review):
         cmd.add_argument("--input", required=True, type=Path)
     build.add_argument("--clip-model", default=CLIP_MODEL, help="HF model ID or local snapshot")
     search.add_argument("--query", required=True)
@@ -85,6 +91,14 @@ def parser():
 
 
 def run(args):
+    if args.command == "review-order":
+        from .order_review import prepare_review
+
+        return prepare_review(args)
+    if args.command == "tally-order":
+        from .order_review import tally_review
+
+        return tally_review(args)
     if args.command == "compare-order":
         from .temporal import compare_order
 

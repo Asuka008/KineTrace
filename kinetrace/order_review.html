@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KineTrace 帧序盲评</title>
+<style>
+* { box-sizing: border-box }
+body { max-width: 64rem; margin: 1.4rem auto; padding: 0 1rem; font: 1rem/1.55 system-ui, sans-serif; color: #202721 }
+h1 { font-size: 1.45rem; margin-bottom: .3rem }
+h2 { font-size: 1.25rem }
+figure { margin: .8rem 0 }
+figcaption, label { font-weight: 600 }
+.strip { display: flex; gap: .25rem; overflow-x: auto }
+.strip img { flex: 1 0 0; min-width: 5rem; width: 0; object-fit: contain; background: #ededeb }
+.fields, nav { display: flex; flex-wrap: wrap; align-items: end; gap: .7rem 1rem; margin: 1rem 0 }
+select, button { font: inherit; padding: .35rem .6rem }
+select { display: block }
+#progress { color: #43534b }
+#storage { color: #713910 }
+</style>
+<h1>KineTrace 帧序盲评</h1>
+<p>从左到右阅读每组画面。先判断描述是否要求特定的动作先后或变化方向，再分别判断 A、B 中可见的事件是否符合描述。若关键事件落在采样帧之间，或需要声音才能判断，请选「无法判断」。</p>
+<p id="progress" aria-live="polite"></p>
+<h2 id="query" lang="en"></h2>
+<figure><figcaption>顺序 A</figcaption><div class="strip" id="strip-a"></div></figure>
+<figure><figcaption>顺序 B</figcaption><div class="strip" id="strip-b"></div></figure>
+<div class="fields">
+  <label>描述依赖顺序吗？<select id="order_dependent"></select></label>
+  <label>A 符合描述吗？<select id="a"></select></label>
+  <label>B 符合描述吗？<select id="b"></select></label>
+</div>
+<nav aria-label="复核操作">
+  <button id="prev">上一条</button><button id="next">下一条</button>
+  <button id="save">下载完整标注</button>
+</nav>
+<p id="storage" role="status"></p>
+<script id="data" type="application/json"><!-- REVIEW_DATA --></script>
+<script>
+"use strict";
+const byId = id => document.getElementById(id);
+const {cases, review_id} = JSON.parse(byId("data").textContent);
+const key = "kinetrace-order-" + review_id;
+const fields = ["order_dependent", "a", "b"];
+const choices = [["", "请选择"], ["yes", "是"], ["no", "否"], ["uncertain", "无法判断"]];
+let answers = cases.map(row => ({query_id: row.query_id}));
+try {
+  const saved = JSON.parse(localStorage.getItem(key));
+  if (Array.isArray(saved) && saved.length === cases.length &&
+      saved.every((row, i) => row && row.query_id === cases[i].query_id &&
+          fields.every(f => row[f] == null || choices.some(([value]) => value === row[f])))) {
+    answers = saved;
+  }
+} catch {
+  byId("storage").textContent = "浏览器无法恢复本页进度。请在关闭前完成并下载标注。";
+}
+const complete = row => fields.every(f => Boolean(row[f]));
+let index = Math.max(0, answers.findIndex(row => !complete(row)));
+function progress() {
+  const count = answers.filter(complete).length;
+  byId("progress").textContent = "第 " + (index + 1) + " / " + cases.length + " 条　·　已评 " + count + " 条";
+  byId("save").disabled = count !== cases.length;
+}
+for (const field of fields) {
+  const select = byId(field);
+  for (const [value, name] of choices) select.add(new Option(name, value));
+  select.onchange = () => {
+    answers[index][field] = select.value;
+    try {
+      localStorage.setItem(key, JSON.stringify(answers));
+      byId("storage").textContent = "进度已保存在当前浏览器。全部评完后请下载标注。";
+    } catch {
+      byId("storage").textContent = "浏览器无法保存进度。请在关闭前完成并下载标注。";
+    }
+    progress();
+  };
+}
+function render() {
+  const row = cases[index];
+  byId("query").textContent = row.query;
+  for (const side of ["a", "b"]) {
+    const images = side === "a" ? row.frames : row.frames.slice().reverse();
+    const strip = byId("strip-" + side);
+    strip.replaceChildren();
+    for (const [i, png] of images.entries()) {
+      const img = new Image();
+      img.alt = side.toUpperCase() + " · 第 " + (i + 1) + " 帧";
+      img.src = "data:image/png;base64," + png;
+      strip.appendChild(img);
+    }
+  }
+  for (const field of fields) byId(field).value = answers[index][field] || "";
+  byId("prev").disabled = index === 0;
+  byId("next").disabled = index === cases.length - 1;
+  progress();
+}
+byId("prev").onclick = () => { index--; render(); };
+byId("next").onclick = () => { index++; render(); };
+byId("save").onclick = () => {
+  const data = JSON.stringify({review_id, answers}, null, 2);
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(new Blob([data], {type: "application/json"}));
+  link.download = "order-judgments.json";
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+};
+render();
+</script>
+</html>
