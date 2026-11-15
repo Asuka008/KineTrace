@@ -48,12 +48,12 @@ Run `python -m scripts.compare_temporal runs/sft-pilot-zxCXNv5N` on the server G
 
 Report forward Recall, reference-label Recall under reversal, all Top-1 changes, candidate/target score deltas and explicit counts of targets outside the scored prefix. Record per-query shared decoding time and scoring p50/p95, actual visible GPU memory and post-warm-up memory peaks. Compare fresh forward predictions with the cached base-Qwen baseline. Save score pairs and source-frame indices for inspection.
 
-This first step measures sensitivity to input frame order. Correct temporal reasoning requires verified order-dependent queries and labels for both original and reversed presentations. General retrieval captions can remain valid under reversal or become invalid, so the reference-label metrics support a diagnostic interpretation. The next dataset work should establish which queries require ordering and whether the sampled frames preserve the relevant events.
+This first step measures sensitivity to input frame order. Interpreting reversal as correct or incorrect on these particular clips would require presentation-specific labels. General retrieval captions can remain valid under reversal or become invalid. The next experiment uses existing sequence annotations on the original videos.
 
 Local CPU fixtures cover frame reversal, metadata isolation, alternating execution, stable ties, candidate misses and result publication. The server report supplies the measured values above. The driver and README provide the same command-line entry points.
 
 ## Subsequent work
 
-The next server action is to run `review-order` on the completed comparison and label the target presentations in its portable A/B page. The implemented workflow covers all 105 scored development targets by default. Reviewers judge order dependence and each presentation's visual match before seeing model scores. Run `tally-order` with the exported labels to build the verified subset and report correct, incorrect and tied score preferences. Record exclusions, the verified denominator and strict pair accuracy once review is complete. Commands are in the README.
+The next server action is `python -m scripts.evaluate_sequence` inside the GPU allocation. The authors' pinned VITATECS Sequence file supplies original and counterfactual captions for MSR-VTT videos already available on the server. Score both captions independently on the same chronological frames and report all 23 pairs, including ties. Record the resulting caption-discrimination accuracy separately from the earlier frame-reversal retrieval diagnostic. The 105-target presentation review is an optional analysis. [VITATECS authors' release](https://github.com/lscpku/VITATECS)
 
 The completed LoRA and bandit experiments supply earlier development results. A broader RL experiment should follow an explicit reward specification and evidence that motivates added complexity.

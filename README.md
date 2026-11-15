@@ -151,7 +151,24 @@ python -m kinetrace compare-order \
     --out runs/frame-order-comparison
 ```
 
-### Review temporal correctness on the scored targets
+### Next run — automatic evaluation with existing sequence labels
+
+Inside the school GPU allocation, run the following from the checkout. The command downloads the authors' small, pinned label file on first use and reuses the school's MSR-VTT clips. The 105-target review is optional.
+
+```bash
+git pull --ff-only origin main
+conda activate "$HOME/conda-envs/kinetrace"
+python -m scripts.evaluate_sequence
+```
+
+The pinned VITATECS Sequence file contains 23 MSR-VTT pairs across 23 videos. Each pair supplies the original caption and a counterfactual that changes the temporal description. The base Qwen reranker scores each caption independently on the same four chronological frames. A correct prediction gives the original caption the higher score. Ties within `1e-6` receive zero credit and count in the denominator. This measures caption discrimination on these clips. The earlier 128-query experiment measures retrieval under frame reversal. [Authors' dataset and task](https://github.com/lscpku/VITATECS)
+
+The script reads `$MSRVTT_ROOT/videos` and extracts any required missing clips from `$MSRVTT_ROOT/MSRVTT_Videos.zip` into temporary storage. The defaults are `~/datasets/MSRVTT`, the Qwen snapshot named above and `runs/` for output. Override these with `--msrvtt-root`, `--videos`, `--qwen-model` or `--out-root`. On an offline compute node, pass `--labels /path/to/Sequence.jsonl` after copying the pinned file from a connected node. [Pinned label file](https://raw.githubusercontent.com/lscpku/VITATECS/58bff59bb1d3ed287983fca8ca7589498f4db6b2/data/Sequence.jsonl)
+
+The command prints the result and its `vitatecs-sequence-*` directory. `summary.json` contains the correct, incorrect and tied pair counts, accuracy and actual GPU memory. `pairs.jsonl` records the source line, both captions, sampled frame indices and scores. The school-server model result is pending.
+
+<details>
+<summary>Optional human review of the original 105 development targets</summary>
 
 On a school-server CPU node, build a portable review page from the completed diagnostic and its original video directory. This reuses both saved Qwen scores. The default covers all 105 validation queries whose annotated target entered the scored prefix. The other 23 have no paired target score. Query order and A/B assignment use seed 42. Eligibility is independent of score changes and Top-1 outcomes.
 
@@ -173,7 +190,9 @@ python -m kinetrace tally-order --review "$RUN/order-review" \
     --judgments "$RUN/order-review/order-judgments.json" --out "$RUN/order-tally"
 ```
 
-`labels.jsonl` records every reviewed caption, the unblinded labels and any exclusion reason. `verified.jsonl` contains order-dependent cases where exactly one presentation matches and both judgments are definite. In `summary.json`, strict pair accuracy is the fraction of verified cases where the matching order receives the higher saved score. Ties within `1e-6` count in the denominator and receive zero credit. An empty verified subset yields a null accuracy. This metric applies to the reviewed development targets. Human labels and measured accuracy for the school run are pending.
+`labels.jsonl` records every reviewed caption, the unblinded labels and any exclusion reason. `verified.jsonl` contains order-dependent cases where exactly one presentation matches and both judgments are definite. In `summary.json`, strict pair accuracy is the fraction of verified cases where the matching order receives the higher saved score. Ties within `1e-6` count in the denominator and receive zero credit. An empty verified subset yields a null accuracy. This metric applies to the reviewed development targets.
+
+</details>
 
 ## Offline contextual bandit
 
@@ -237,7 +256,7 @@ python -m kinetrace bandit-compare \
 | LoRA SFT | Training, adapter reload and paired evaluation completed | Reference checkpoint for candidate-policy comparisons |
 | Offline contextual bandit | Three-seed pilot completed, mean R@1 64.32% versus LoRA 64.06% | Broader held-out evidence before adopting a policy |
 | Frame-order sensitivity | Server diagnostic completed, 35/128 Top-1 changes and 4.020 GiB peak allocated | Recorded score/ranking traces support temporal-label review |
-| Temporal understanding | CPU blind review and paired-score evaluation implemented | Complete the human labels and report verified subset size, exclusions and strict pair accuracy |
+| Temporal understanding | Automatic VITATECS Sequence caption-pair evaluation implemented | Record the school run's correct, incorrect and tied counts and paired accuracy |
 | Final evaluation | Planned | Fixed settings and fresh held-out quality measurements |
 
 The project plan describes the experiment sequence and reward limitations. [Project plan](KineTrace-Plan.md)
