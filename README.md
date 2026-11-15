@@ -151,9 +151,11 @@ python -m kinetrace compare-order \
     --out runs/frame-order-comparison
 ```
 
-### Next run — automatic evaluation with existing sequence labels
+### VITATECS Sequence caption discrimination
 
-Inside the school GPU allocation, run the following from the checkout. The command downloads the authors' small, pinned label file on first use and reuses the school's MSR-VTT clips. The 105-target review is optional.
+The completed school run `runs/vitatecs-sequence-pa7hogja` scored **12 correct, 8 incorrect and 3 ties** over 23 videos, for **52.17% strict pair accuracy**. Among the 20 pairs with unequal scores beyond the tie tolerance, Qwen preferred the original caption 12 times. This small sample provides limited evidence of a consistent preference for the correct temporal description. PyTorch saw 16.0 GiB on an H200 NVL MIG 1g.18gb, with peaks of 4.020 GiB allocated and 4.031 GiB reserved.
+
+To reproduce the run inside a school GPU allocation, use the following commands. The script downloads the authors' pinned label file on first use and reuses the school's MSR-VTT clips. The 105-target review is optional.
 
 ```bash
 git pull --ff-only origin main
@@ -165,7 +167,7 @@ The pinned VITATECS Sequence file contains 23 MSR-VTT pairs across 23 videos. Ea
 
 The script reads `$MSRVTT_ROOT/videos` and extracts any required missing clips from `$MSRVTT_ROOT/MSRVTT_Videos.zip` into temporary storage. The defaults are `~/datasets/MSRVTT`, the Qwen snapshot named above and `runs/` for output. Override these with `--msrvtt-root`, `--videos`, `--qwen-model` or `--out-root`. On an offline compute node, pass `--labels /path/to/Sequence.jsonl` after copying the pinned file from a connected node. [Pinned label file](https://raw.githubusercontent.com/lscpku/VITATECS/58bff59bb1d3ed287983fca8ca7589498f4db6b2/data/Sequence.jsonl)
 
-The command prints the result and its `vitatecs-sequence-*` directory. `summary.json` contains the correct, incorrect and tied pair counts, accuracy and actual GPU memory. `pairs.jsonl` records the source line, both captions, sampled frame indices and scores. The school-server model result is pending.
+The command prints the result and its `vitatecs-sequence-*` directory. `summary.json` contains the correct, incorrect and tied pair counts, accuracy and actual GPU memory. `pairs.jsonl` records the source line, both captions, sampled frame indices and scores.
 
 <details>
 <summary>Optional human review of the original 105 development targets</summary>
@@ -256,7 +258,7 @@ python -m kinetrace bandit-compare \
 | LoRA SFT | Training, adapter reload and paired evaluation completed | Reference checkpoint for candidate-policy comparisons |
 | Offline contextual bandit | Three-seed pilot completed, mean R@1 64.32% versus LoRA 64.06% | Broader held-out evidence before adopting a policy |
 | Frame-order sensitivity | Server diagnostic completed, 35/128 Top-1 changes and 4.020 GiB peak allocated | Recorded score/ranking traces support temporal-label review |
-| Temporal understanding | Automatic VITATECS Sequence caption-pair evaluation implemented | Record the school run's correct, incorrect and tied counts and paired accuracy |
+| Temporal understanding | VITATECS Sequence run completed, 12/23 correct (52.17%) | Use saved pair scores to inspect errors and ties |
 | Final evaluation | Planned | Fixed settings and fresh held-out quality measurements |
 
 The project plan describes the experiment sequence and reward limitations. [Project plan](KineTrace-Plan.md)
