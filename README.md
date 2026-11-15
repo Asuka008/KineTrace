@@ -169,6 +169,26 @@ The script reads `$MSRVTT_ROOT/videos` and extracts any required missing clips f
 
 The command prints the result and its `vitatecs-sequence-*` directory. `summary.json` contains the correct, incorrect and tied pair counts, accuracy and actual GPU memory. `pairs.jsonl` records the source line, both captions, sampled frame indices and scores.
 
+### Next experiment — do six additional frames help?
+
+Run this command inside the school GPU allocation. It reuses the cached labels and videos, loads the base model once, and scores all 23 pairs one caption at a time.
+
+```bash
+git pull --ff-only origin main
+conda activate "$HOME/conda-envs/kinetrace"
+python -m scripts.evaluate_sequence --compare-frames
+```
+
+| Condition | Images shown | Timestamp slots |
+| --- | --- | --- |
+| `four` | The original four frames, rescored in this run | Four original slots |
+| `four_repeated` | At each of ten slots, show the nearest of the four original frames | Ten chronological slots |
+| `ten` | Ten distinct frames, including all four originals | The same ten slots |
+
+The ten-frame grid adds two observations between each adjacent pair of original frames. The primary comparison is `four_repeated_to_ten`, which holds input length and timestamps fixed while replacing repeated images with the six intermediate frames. `four_to_ten` measures the practical change from the four-frame baseline. `four_to_four_repeated` shows how the model responds to the repetition control. Each condition uses the published labels and the same strict scoring rule.
+
+The printed `vitatecs-frames-*` directory contains `summary.json` with the three accuracies, paired gains/losses, outcome transitions and GPU memory. `pairs.jsonl` records both caption scores, source frames and timestamp slots for each condition. The JPEGs under `frames/` show the ten sampled frames and mark the original four. For the largest previous error, inspect `frames/video9580.jpg` alongside its scores. These are development-set comparisons. The ten-frame school-server result is pending.
+
 <details>
 <summary>Optional human review of the original 105 development targets</summary>
 
@@ -258,7 +278,7 @@ python -m kinetrace bandit-compare \
 | LoRA SFT | Training, adapter reload and paired evaluation completed | Reference checkpoint for candidate-policy comparisons |
 | Offline contextual bandit | Three-seed pilot completed, mean R@1 64.32% versus LoRA 64.06% | Broader held-out evidence before adopting a policy |
 | Frame-order sensitivity | Server diagnostic completed, 35/128 Top-1 changes and 4.020 GiB peak allocated | Recorded score/ranking traces support temporal-label review |
-| Temporal understanding | VITATECS Sequence run completed, 12/23 correct (52.17%). All eight errors and three exact ties are documented in [the experiment log](EXPERIMENTS.md#8-对错误与-3-对平局) | Frame-level evidence would be needed to attribute errors to sampling |
+| Temporal understanding | Four-frame VITATECS run completed, 12/23 correct (52.17%). Controlled ten-frame comparison implemented | Record paired gains and losses and inspect the saved frames for changed cases |
 | Final evaluation | Planned | Fixed settings and fresh held-out quality measurements |
 
 The project plan describes the experiment sequence and reward limitations. [Project plan](KineTrace-Plan.md)

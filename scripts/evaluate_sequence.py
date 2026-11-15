@@ -2,7 +2,6 @@
 import argparse
 import hashlib
 import json
-import math
 import os
 import re
 import shutil
@@ -15,6 +14,7 @@ from urllib.request import urlopen
 
 from kinetrace.data import output_file, write_run
 from kinetrace.reranker import QwenScorer
+from kinetrace.sequence import compare_conditions, frame_conditions, outcome_counts, save_frame_sheet, score_pair
 from kinetrace.temporal import SCORE_TOLERANCE
 from kinetrace.video import read_clip
 
@@ -80,48 +80,55 @@ def video_paths(names, video_dir, archive_path, temporary):
 def evaluate(args):
     pairs = load_labels(args.msrvtt_root, args.labels)
     videos = args.videos or args.msrvtt_root / "videos"
+    frames = 10 if args.compare_frames else 4
     args.out_root.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=args.out_root) as temporary:
         paths = video_paths({r["video_name"] for r in pairs}, videos,
                             args.msrvtt_root / "MSRVTT_Videos.zip", Path(temporary))
+        stage = Path(temporary) / "result"
+        stage.mkdir()
+        if args.compare_frames:
+            (stage / "frames").mkdir()
         device = {"device": args.device}
         if args.device == "cuda":
             import torch
 
             props = torch.cuda.get_device_properties(0)
-            device.update(gpu=props.name, visible_gib=props.total_memory / 2**30)
+            device.update(gpu=props.name, visible_gib=props.total_memory / 2**30,
+                          free_before_load_gib=torch.cuda.mem_get_info()[0] / 2**30)
             torch.cuda.reset_peak_memory_stats()
         print(json.dumps(device), file=sys.stderr, flush=True)
-        scorer = QwenScorer(args.qwen_model, args.device, videos, frames=4)
+        scorer = QwenScorer(args.qwen_model, args.device, videos, frames=frames)
         results = []
-        counts = {"correct": 0, "incorrect": 0, "tie": 0}
         for pair in pairs:
-            images, metadata = read_clip(paths[pair["video_name"]], 4)
-            positive = scorer.score_frames(pair["caption"], images, metadata)
-            negative = scorer.score_frames(pair["counterfactual"], images, metadata)
-            margin = positive - negative
-            if not math.isfinite(margin):
-                raise ValueError(f"Non-finite score at label line {pair['line']}")
-            if abs(margin) <= SCORE_TOLERANCE:
-                outcome = "tie"
+            images, metadata = read_clip(paths[pair["video_name"]], frames)
+            if args.compare_frames:
+                conditions = frame_conditions(scorer, pair, images, metadata)
+                sheet = f"frames/{Path(pair['video_name']).stem}.jpg"
+                save_frame_sheet(stage / sheet, images, metadata["frames_indices"], conditions["four"]["source_indices"])
+                results.append(dict(pair, conditions=conditions, frame_sheet=sheet))
             else:
-                outcome = "correct" if margin > 0 else "incorrect"
-            counts[outcome] += 1
-            results.append(dict(pair, sampled_indices=metadata["frames_indices"], caption_score=positive,
-                                counterfactual_score=negative, outcome=outcome))
+                results.append(dict(pair, sampled_indices=metadata["frames_indices"],
+                                    **score_pair(scorer, pair, images, metadata)))
         if args.device == "cuda":
             device.update(peak_allocated_gib=torch.cuda.max_memory_allocated() / 2**30,
                           peak_reserved_gib=torch.cuda.max_memory_reserved() / 2**30)
-    out = Path(tempfile.mkdtemp(prefix="vitatecs-sequence-", dir=args.out_root))
-    report = {"task": "VITATECS Sequence / MSRVTT caption discrimination", "labels_url": LABEL_URL,
-              "labels_sha256": LABEL_SHA256, "model": args.qwen_model, "frames": 4, "device": device,
-              "pairs": len(results), "videos": len(paths), **counts, "tie_atol": SCORE_TOLERANCE,
-              "strict_pair_accuracy": counts["correct"] / len(results)}
-    (out / "commit.txt").write_text(subprocess.check_output(["git", "rev-parse", "HEAD"], text=True))
-    (out / "environment.txt").write_text(subprocess.check_output([sys.executable, "-m", "pip", "freeze"], text=True))
-    write_run(out / "pairs.jsonl", results)
-    with output_file(out / "summary.json") as stream:
-        json.dump(report, stream, indent=2, allow_nan=False)
+        report = {"task": "VITATECS Sequence / MSRVTT caption discrimination", "labels_url": LABEL_URL,
+                  "labels_sha256": LABEL_SHA256, "model": args.qwen_model, "device": device,
+                  "pairs": len(results), "videos": len(paths), "tie_atol": SCORE_TOLERANCE}
+        if args.compare_frames:
+            report.update(experiment="four_vs_ten_chronological_frames", **compare_conditions(results))
+            prefix = "vitatecs-frames-"
+        else:
+            report.update(frames=4, **outcome_counts(results))
+            prefix = "vitatecs-sequence-"
+        (stage / "commit.txt").write_text(subprocess.check_output(["git", "rev-parse", "HEAD"], text=True))
+        (stage / "environment.txt").write_text(subprocess.check_output([sys.executable, "-m", "pip", "freeze"], text=True))
+        write_run(stage / "pairs.jsonl", results)
+        with output_file(stage / "summary.json") as stream:
+            json.dump(report, stream, indent=2, allow_nan=False)
+        out = Path(tempfile.mkdtemp(prefix=prefix, dir=args.out_root))
+        stage.replace(out)
     print(json.dumps(report, indent=2))
     print(f"Results: {out}", flush=True)
     return report
@@ -129,6 +136,8 @@ def evaluate(args):
 
 def parser():
     cli = argparse.ArgumentParser(description=__doc__)
+    cli.add_argument("--compare-frames", action="store_true",
+                     help="compare four frames, the same four repeated over ten slots, and ten distinct frames")
     cli.add_argument("--msrvtt-root", type=Path,
                      default=Path(os.getenv("MSRVTT_ROOT", Path.home() / "datasets/MSRVTT")))
     cli.add_argument("--videos", type=Path, help="flat MP4 directory (default: MSRVTT_ROOT/videos)")

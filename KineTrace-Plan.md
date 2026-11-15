@@ -60,4 +60,6 @@ The saved pair scores reproduce all 23 outcomes. The largest error favored the r
 
 ## Subsequent work
 
+Run `python -m scripts.evaluate_sequence --compare-frames` on the school GPU. All 23 previously inspected clips support a ten-frame grid containing the original four. Rescore the four-frame baseline and compare ten distinct frames with the original four repeated over the same ten timestamp slots. Use strict accuracy and report both gained and lost cases across the full subset. Saved frame sheets support inspection of the largest error and of cases whose outcome changes. Server measurements for this comparison are pending.
+
 The completed LoRA and bandit experiments supply earlier development results. A broader RL experiment should follow an explicit reward specification and evidence that motivates added complexity.
